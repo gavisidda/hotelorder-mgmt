@@ -1,0 +1,1034 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Restaurant Order Management</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0d1420">
+<link rel="stylesheet" href="styles.css">
+<style>
+  .view { display: none; }
+  .tabs { display: flex; gap: 8px; overflow-x: auto; padding: 4px 16px 12px; }
+  .tabs button { width: auto; white-space: nowrap; background: var(--bg-card); color: var(--text-dim); border: 1px solid var(--border); }
+  .tabs button.active { background: var(--gold); color: #1a1408; border: none; }
+  .item-card { display: flex; gap: 12px; }
+  .item-img { width: 72px; height: 72px; border-radius: 10px; object-fit: cover; background: #0f1726; flex-shrink: 0; }
+  .item-info { flex: 1; min-width: 0; }
+  .item-name { font-weight: 600; margin: 0 0 4px; }
+  .item-price { color: var(--gold-soft); font-weight: 700; }
+  .qty-ctrl { display: flex; align-items: center; gap: 8px; }
+  .qty-ctrl button { width: 30px; height: 30px; border-radius: 8px; padding: 0; font-size: 16px; }
+  .cart-bar {
+    position: fixed; bottom: 76px; left: 0; right: 0;
+    background: var(--gold); color: #1a1408; padding: 14px 16px;
+    display: none; justify-content: space-between; align-items: center;
+    font-weight: 700; z-index: 25; cursor: pointer;
+  }
+  .sheet { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; display: none; }
+  .sheet-inner { position: absolute; bottom: 0; left: 0; right: 0; max-height: 88vh; overflow-y: auto; background: var(--bg-card); border-radius: 20px 20px 0 0; padding: 20px; }
+  .cart-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .board { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; padding: 16px; }
+  .kcard { border-top: 4px solid var(--blue); }
+  .kcard.preparing { border-top-color: var(--amber); }
+  .kcard h2 { margin: 0 0 8px; font-size: 22px; }
+  .kcard li { font-size: 16px; margin-bottom: 4px; }
+  .timer { font-size: 12px; color: var(--text-dim); }
+  .pay-option { display: flex; gap: 10px; margin-bottom: 10px; }
+  .pay-option button { background: var(--bg-card); border: 1px solid var(--border); color: var(--text); }
+  .pay-option button.selected { background: var(--gold); color: #1a1408; border: none; }
+  .fab { position: fixed; bottom: 90px; right: 18px; width: 54px; height: 54px; border-radius: 50%; font-size: 24px; z-index: 25; box-shadow: 0 6px 16px rgba(0,0,0,0.4); }
+  .qr-box { text-align: center; padding: 14px; }
+  .qr-box img, .qr-box canvas { background: white; padding: 8px; border-radius: 8px; }
+  .stat-row { display: flex; gap: 10px; }
+  .stat-row .card { flex: 1; text-align: center; }
+  .stat-row h2 { margin: 4px 0; color: var(--gold-soft); font-size: 22px; }
+</style>
+</head>
+<body>
+
+<div id="view-login" class="view container" style="padding-top:60px">
+  <h1 style="text-align:center;color:var(--gold-soft)">🔐 Staff Login</h1>
+  <p class="small" style="text-align:center">Enter your mobile number to continue</p>
+  <input id="loginMobile" type="tel" inputmode="numeric" placeholder="10-digit mobile number" maxlength="10">
+  <button onclick="loginCheckMobile()">Continue</button>
+  <p id="loginError" style="text-align:center;color:var(--red);min-height:18px;font-size:13px"></p>
+
+  <div id="registerBox" style="display:none">
+    <p class="small" style="text-align:center">New here? Enter your name to request access</p>
+    <input id="registerName" placeholder="Full name">
+    <button onclick="loginRegister()">Register</button>
+  </div>
+</div>
+
+<div id="view-pending" class="view container" style="padding-top:60px;text-align:center">
+  <h1 style="color:var(--gold-soft)">⏳ Waiting for Approval</h1>
+  <p class="small">Your account is registered but not active yet. Ask your admin to approve you and assign your role in the Users tab of the admin dashboard.</p>
+  <button class="secondary" onclick="showView('login')">Back to Login</button>
+</div>
+
+<div id="view-customer" class="view">
+  <div class="topbar">
+    <div>
+      <h1 id="restaurantName">Restaurant</h1>
+      <div class="sub" id="tableLabel">Table --</div>
+    </div>
+    <button class="ghost" style="width:auto" onclick="custShowOrderHistory()">📋 My Orders</button>
+  </div>
+
+  <div class="tabs" id="categoryTabs"></div>
+
+  <div class="container" id="menuList">
+    <div class="spinner"></div>
+  </div>
+
+  <div class="cart-bar" id="cartBar" onclick="custOpenCart()">
+    <span id="cartSummary">0 items</span>
+    <span>View Cart →</span>
+  </div>
+
+  <div class="sheet" id="cartSheet">
+    <div class="sheet-inner">
+      <h2 style="margin-top:0;color:var(--gold-soft)">Your Order</h2>
+      <div id="cartItems"></div>
+      <textarea id="specialInstructions" placeholder="Special instructions (e.g. less spicy, no onion)"></textarea>
+      <div class="row" style="margin-bottom:14px">
+        <strong>Total</strong>
+        <strong id="cartTotal" style="color:var(--gold-soft)">₹0</strong>
+      </div>
+      <button onclick="custPlaceOrder()">Place Order</button>
+      <button class="secondary" style="margin-top:8px" onclick="custCloseCart()">Continue Browsing</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="historySheet">
+    <div class="sheet-inner">
+      <h2 style="margin-top:0;color:var(--gold-soft)">Order Status</h2>
+      <div id="historyList"></div>
+      <div class="grid-2" style="margin-top:10px">
+        <button class="secondary" onclick="custCallWaiter()">🔔 Call Waiter</button>
+        <button onclick="custRequestBill()">🧾 Request Bill</button>
+      </div>
+      <button class="secondary" style="margin-top:8px" onclick="custCloseHistory()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="view-waiter" class="view">
+  <div class="topbar">
+    <div><h1 id="waiterName">Waiter</h1><div class="sub">Live orders</div></div>
+    <button class="secondary" style="width:auto" onclick="doLogout()">Logout</button>
+  </div>
+  <div class="container" id="waiterContent"><div class="spinner"></div></div>
+  <div class="bottom-nav">
+    <a href="#" class="active" onclick="waiterSetTab('orders')"><span class="icon">🔔</span>Orders</a>
+    <a href="#" onclick="waiterSetTab('tables')"><span class="icon">🍽️</span>Tables</a>
+    <a href="#" onclick="waiterSetTab('calls')"><span class="icon">📣</span>Calls</a>
+  </div>
+</div>
+
+<div id="view-kitchen" class="view">
+  <div class="topbar">
+    <h1>🔥 Kitchen Display</h1>
+    <button class="secondary" style="width:auto" onclick="doLogout()">Logout</button>
+  </div>
+  <div class="board" id="kitchenBoard"></div>
+</div>
+
+<div id="view-cashier" class="view">
+  <div class="topbar">
+    <div><h1 id="cashierName">Cashier</h1><div class="sub">Pending bills</div></div>
+    <button class="secondary" style="width:auto" onclick="doLogout()">Logout</button>
+  </div>
+  <div class="container" id="cashierContent"><div class="spinner"></div></div>
+  <div class="bottom-nav">
+    <a href="#" class="active" onclick="cashierSetTab('pending')"><span class="icon">🧾</span>Pending</a>
+    <a href="#" onclick="cashierSetTab('report')"><span class="icon">📊</span>Today</a>
+  </div>
+</div>
+
+<div class="sheet" id="paySheet">
+  <div class="sheet-inner">
+    <h2 style="margin-top:0;color:var(--gold-soft)">Table <span id="payTable"></span></h2>
+    <div id="payItems"></div>
+    <div class="row" style="margin:12px 0"><strong>Total</strong><strong id="payTotal" style="color:var(--gold-soft)"></strong></div>
+    <p class="small">Payment method</p>
+    <div class="pay-option">
+      <button id="payCash" onclick="cashierSelectMethod('Cash')">💵 Cash</button>
+      <button id="payUPI" onclick="cashierSelectMethod('UPI')">📱 UPI</button>
+      <button id="payCard" onclick="cashierSelectMethod('Card')">💳 Card</button>
+    </div>
+    <button onclick="cashierConfirmPayment()">Confirm Payment & Print Receipt</button>
+    <button class="secondary" style="margin-top:8px" onclick="closeSheet('paySheet')">Cancel</button>
+  </div>
+</div>
+
+<div id="view-admin" class="view">
+  <div class="topbar">
+    <div><h1 id="adminName">Admin</h1><div class="sub" id="adminTabLabel">Overview</div></div>
+    <button class="secondary" style="width:auto" onclick="doLogout()">Logout</button>
+  </div>
+  <div class="container" id="adminContent"><div class="spinner"></div></div>
+  <button class="fab" id="adminFab" onclick="adminOpenAddSheet()" style="display:none">+</button>
+  <div class="bottom-nav">
+    <a href="#" class="active" onclick="adminSetTab('overview')"><span class="icon">📊</span>Overview</a>
+    <a href="#" onclick="adminSetTab('menu')"><span class="icon">🍽️</span>Menu</a>
+    <a href="#" onclick="adminSetTab('users')"><span class="icon">👥</span>Users</a>
+    <a href="#" onclick="adminSetTab('tables')"><span class="icon">🔲</span>QR</a>
+    <a href="#" onclick="adminSetTab('settings')"><span class="icon">⚙️</span>More</a>
+  </div>
+</div>
+
+<div class="sheet" id="menuSheet">
+  <div class="sheet-inner">
+    <h2 style="margin-top:0;color:var(--gold-soft)" id="menuSheetTitle">Add Menu Item</h2>
+    <input type="hidden" id="menuItemId">
+    <input id="itemName" placeholder="Item name">
+    <select id="itemCategory"></select>
+    <input id="itemPrice" type="number" placeholder="Price (₹)">
+    <input id="itemImage" placeholder="Image URL (optional)">
+    <textarea id="itemDesc" placeholder="Short description (optional)"></textarea>
+    <label class="row"><span>Available</span><input type="checkbox" id="itemAvailable" style="width:auto" checked></label>
+    <button onclick="adminSaveMenuItem()">Save Item</button>
+    <button class="secondary" style="margin-top:8px" onclick="closeSheet('menuSheet')">Cancel</button>
+  </div>
+</div>
+
+<div class="sheet" id="catSheet">
+  <div class="sheet-inner">
+    <h2 style="margin-top:0;color:var(--gold-soft)">Add Category</h2>
+    <input id="catName" placeholder="Category name (e.g. Starters)">
+    <button onclick="adminSaveCategory()">Save Category</button>
+    <button class="secondary" style="margin-top:8px" onclick="closeSheet('catSheet')">Cancel</button>
+  </div>
+</div>
+
+<div class="sheet" id="userSheet">
+  <div class="sheet-inner">
+    <h2 style="margin-top:0;color:var(--gold-soft)">Add Staff Directly</h2>
+    <input id="userMobile" type="tel" inputmode="numeric" placeholder="10-digit mobile number" maxlength="10">
+    <input id="userName" placeholder="Full name">
+    <select id="userRole">
+      <option value="waiter">Waiter</option>
+      <option value="kitchen">Kitchen</option>
+      <option value="cashier">Cashier</option>
+      <option value="admin">Admin</option>
+    </select>
+    <button onclick="adminSaveUserDirect()">Save & Activate</button>
+    <button class="secondary" style="margin-top:8px" onclick="closeSheet('userSheet')">Cancel</button>
+  </div>
+</div>
+
+<div id="toastHolder"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+function showView(name) {
+  document.querySelectorAll('.view').forEach(v => v.style.display = 'none');
+  document.getElementById('view-' + name).style.display = 'block';
+}
+
+function getStaffSession() {
+  const raw = sessionStorage.getItem('staffSession');
+  return raw ? JSON.parse(raw) : null;
+}
+
+function doLogout() {
+  sessionStorage.removeItem('staffSession');
+  location.href = location.pathname;
+}
+
+function routeToRole(role) {
+  if (role === 'admin') { showView('admin'); adminInit(); }
+  else if (role === 'waiter') { showView('waiter'); waiterInit(); }
+  else if (role === 'kitchen') { showView('kitchen'); kitchenInit(); }
+  else if (role === 'cashier') { showView('cashier'); cashierInit(); }
+  else { showView('pending'); }
+}
+
+function appInit() {
+  const table = getTableFromURL();
+  if (table) {
+    custInit(table);
+    showView('customer');
+    return;
+  }
+  const session = getStaffSession();
+  if (session && session.role) {
+    routeToRole(session.role);
+  } else {
+    showView('login');
+  }
+}
+
+function closeSheet(id) { document.getElementById(id).style.display = 'none'; }
+
+function toast(msg) {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  document.getElementById('toastHolder').appendChild(t);
+  setTimeout(() => t.remove(), 2200);
+}
+
+let pendingMobile = '';
+
+function showLoginError(msg) {
+  document.getElementById('loginError').textContent = msg;
+}
+
+function loginCheckMobile() {
+  const mobile = document.getElementById('loginMobile').value.trim();
+  if (!/^\d{10}$/.test(mobile)) {
+    showLoginError('Enter a valid 10-digit mobile number');
+    return;
+  }
+  showLoginError('');
+  db.collection('users').where('mobile', '==', mobile).limit(1).get().then(snap => {
+    if (snap.empty) {
+      pendingMobile = mobile;
+      document.getElementById('registerBox').style.display = 'block';
+    } else {
+      const doc = snap.docs[0];
+      const data = doc.data();
+      if (!data.active || !data.role || data.role === 'pending') {
+        showView('pending');
+      } else {
+        const session = { id: doc.id, mobile: data.mobile, name: data.name, role: data.role };
+        sessionStorage.setItem('staffSession', JSON.stringify(session));
+        routeToRole(data.role);
+      }
+    }
+  }).catch(err => showLoginError('Login failed: ' + err.message));
+}
+
+function loginRegister() {
+  const name = document.getElementById('registerName').value.trim();
+  if (!name) { alert('Please enter your name'); return; }
+  db.collection('users').add({
+    mobile: pendingMobile,
+    name,
+    role: 'pending',
+    active: false,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(() => {
+    document.getElementById('registerBox').style.display = 'none';
+    document.getElementById('registerName').value = '';
+    showView('pending');
+  }).catch(err => alert('Registration failed: ' + err.message));
+}
+
+let custTableId = 'T01';
+let custMenuItems = [];
+let custCategories = [];
+let custActiveCategory = 'all';
+let custCart = {};
+
+function custInit(table) {
+  custTableId = table;
+  custCart = JSON.parse(sessionStorage.getItem('cart_' + custTableId) || '{}');
+  document.getElementById('tableLabel').textContent = 'Table ' + custTableId.replace(/^T0*/, '');
+  custLoadSettings();
+  custLoadCategories();
+  custLoadMenu();
+  custRenderCartBar();
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+}
+
+function custSaveCart() {
+  sessionStorage.setItem('cart_' + custTableId, JSON.stringify(custCart));
+  custRenderCartBar();
+}
+
+function custRenderCartBar() {
+  const count = Object.values(custCart).reduce((s, c) => s + c.qty, 0);
+  const bar = document.getElementById('cartBar');
+  if (count > 0) {
+    bar.style.display = 'flex';
+    document.getElementById('cartSummary').textContent = count + ' item' + (count > 1 ? 's' : '') + ' added';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function custLoadSettings() {
+  db.collection('settings').doc('restaurant').get().then(doc => {
+    if (doc.exists) {
+      document.getElementById('restaurantName').textContent = doc.data().name || 'Restaurant';
+      document.title = (doc.data().name || 'Restaurant') + ' | Menu';
+    }
+  });
+}
+
+function custLoadCategories() {
+  db.collection('categories').orderBy('order').get().then(snap => {
+    custCategories = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    custRenderTabs();
+  });
+}
+
+function custRenderTabs() {
+  const wrap = document.getElementById('categoryTabs');
+  wrap.innerHTML = '';
+  const allBtn = document.createElement('button');
+  allBtn.textContent = 'All';
+  allBtn.className = custActiveCategory === 'all' ? 'active' : '';
+  allBtn.onclick = () => { custActiveCategory = 'all'; custRenderTabs(); custRenderMenu(); };
+  wrap.appendChild(allBtn);
+  custCategories.forEach(cat => {
+    const b = document.createElement('button');
+    b.textContent = cat.name;
+    b.className = custActiveCategory === cat.id ? 'active' : '';
+    b.onclick = () => { custActiveCategory = cat.id; custRenderTabs(); custRenderMenu(); };
+    wrap.appendChild(b);
+  });
+}
+
+function custLoadMenu() {
+  db.collection('menu').where('available', '==', true).onSnapshot(snap => {
+    custMenuItems = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    custRenderMenu();
+  }, err => {
+    document.getElementById('menuList').innerHTML = '<div class="empty-state">Could not load menu. Check your connection.</div>';
+  });
+}
+
+function custRenderMenu() {
+  const list = custActiveCategory === 'all' ? custMenuItems : custMenuItems.filter(i => i.category === custActiveCategory);
+  const wrap = document.getElementById('menuList');
+  if (list.length === 0) {
+    wrap.innerHTML = '<div class="empty-state">No items in this category yet.</div>';
+    return;
+  }
+  wrap.innerHTML = list.map(item => {
+    const qty = custCart[item.id] ? custCart[item.id].qty : 0;
+    return `
+    <div class="card item-card">
+      <img class="item-img" src="${item.image || ''}" onerror="this.style.opacity=0">
+      <div class="item-info">
+        <p class="item-name">${item.name}</p>
+        <p class="small">${item.description || ''}</p>
+        <p class="item-price">₹${item.price}</p>
+      </div>
+      <div class="qty-ctrl">
+        ${qty > 0 ? `<button onclick="custChangeQty('${item.id}',-1)">−</button><span>${qty}</span>` : ''}
+        <button onclick="custChangeQty('${item.id}',1)">+</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function custChangeQty(itemId, delta) {
+  const item = custMenuItems.find(i => i.id === itemId);
+  if (!custCart[itemId]) custCart[itemId] = { name: item.name, price: item.price, qty: 0 };
+  custCart[itemId].qty += delta;
+  if (custCart[itemId].qty <= 0) delete custCart[itemId];
+  custSaveCart();
+  custRenderMenu();
+}
+
+function custOpenCart() {
+  const wrap = document.getElementById('cartItems');
+  const entries = Object.entries(custCart);
+  if (entries.length === 0) { toast('Your cart is empty'); return; }
+  wrap.innerHTML = entries.map(([id, c]) => `
+    <div class="cart-row">
+      <span>${c.name} × ${c.qty}</span>
+      <span>₹${c.price * c.qty}</span>
+    </div>`).join('');
+  const total = entries.reduce((s, [, c]) => s + c.price * c.qty, 0);
+  document.getElementById('cartTotal').textContent = '₹' + total;
+  document.getElementById('cartSheet').style.display = 'block';
+}
+function custCloseCart() { document.getElementById('cartSheet').style.display = 'none'; }
+
+function custPlaceOrder() {
+  const entries = Object.entries(custCart);
+  if (entries.length === 0) return;
+  const items = entries.map(([id, c]) => ({ itemId: id, name: c.name, price: c.price, qty: c.qty }));
+  const total = items.reduce((s, i) => s + i.price * i.qty, 0);
+  const notes = document.getElementById('specialInstructions').value.trim();
+
+  db.collection('orders').add({
+    table: custTableId,
+    items,
+    notes,
+    total,
+    status: 'new',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(ref => {
+    db.collection('tables').doc(custTableId).set({
+      status: 'occupied',
+      lastOrderId: ref.id,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    let history = JSON.parse(localStorage.getItem('orderHistory_' + custTableId) || '[]');
+    history.push(ref.id);
+    localStorage.setItem('orderHistory_' + custTableId, JSON.stringify(history));
+
+    custCart = {};
+    custSaveCart();
+    document.getElementById('specialInstructions').value = '';
+    custCloseCart();
+    toast('✅ Order placed! Track it in "My Orders"');
+  }).catch(err => toast('Failed to place order: ' + err.message));
+}
+
+function custShowOrderHistory() {
+  const ids = JSON.parse(localStorage.getItem('orderHistory_' + custTableId) || '[]');
+  const wrap = document.getElementById('historyList');
+  if (ids.length === 0) {
+    wrap.innerHTML = '<div class="empty-state">No orders yet from this device.</div>';
+  } else {
+    wrap.innerHTML = '<div class="spinner"></div>';
+    Promise.all(ids.map(id => db.collection('orders').doc(id).get())).then(docs => {
+      wrap.innerHTML = docs.filter(d => d.exists).reverse().map(d => {
+        const o = d.data();
+        return `<div class="card">
+          <div class="row"><strong>${o.items.map(i=>i.name+' ×'+i.qty).join(', ')}</strong></div>
+          <div class="row"><span class="small">₹${o.total}</span><span class="badge ${o.status}">${o.status}</span></div>
+        </div>`;
+      }).join('') || '<div class="empty-state">No orders found.</div>';
+    });
+  }
+  document.getElementById('historySheet').style.display = 'block';
+}
+function custCloseHistory() { document.getElementById('historySheet').style.display = 'none'; }
+
+function custCallWaiter() {
+  db.collection('tables').doc(custTableId).set({
+    waiterCall: true,
+    waiterCallAt: firebase.firestore.FieldValue.serverTimestamp()
+  }, { merge: true }).then(() => toast('🔔 Waiter has been notified'));
+}
+
+function custRequestBill() {
+  db.collection('tables').doc(custTableId).set({
+    billRequested: true,
+    billRequestedAt: firebase.firestore.FieldValue.serverTimestamp()
+  }, { merge: true }).then(() => toast('🧾 Bill requested — cashier notified'));
+}
+
+let waiterActiveTab = 'orders';
+
+function waiterInit() {
+  const session = getStaffSession();
+  document.getElementById('waiterName').textContent = (session && session.name) || 'Waiter';
+  waiterRender();
+}
+
+function waiterSetTab(tab) {
+  waiterActiveTab = tab;
+  const nav = document.getElementById('view-waiter').querySelectorAll('.bottom-nav a');
+  nav.forEach(a => a.classList.remove('active'));
+  event.target.closest('a').classList.add('active');
+  waiterRender();
+}
+
+function waiterRender() {
+  if (waiterActiveTab === 'orders') waiterRenderOrders();
+  else if (waiterActiveTab === 'tables') waiterRenderTables();
+  else if (waiterActiveTab === 'calls') waiterRenderCalls();
+}
+
+function waiterRenderOrders() {
+  db.collection('orders').where('status', 'in', ['new', 'ready']).onSnapshot(snap => {
+    if (waiterActiveTab !== 'orders') return;
+    const orders = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+    const wrap = document.getElementById('waiterContent');
+    if (orders.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No new or ready orders right now 🎉</div>';
+      return;
+    }
+    wrap.innerHTML = orders.map(o => `
+      <div class="card">
+        <div class="row">
+          <strong>Table ${o.table.replace(/^T0*/,'')}</strong>
+          <span class="badge ${o.status}">${o.status === 'new' ? 'New Order' : 'Ready to Serve'}</span>
+        </div>
+        <p>${o.items.map(i => i.qty + ' × ' + i.name).join(', ')}</p>
+        ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
+        <div class="row"><span class="small">₹${o.total}</span></div>
+        ${o.status === 'new'
+          ? `<button onclick="waiterAcceptOrder('${o.id}')">Accept Order</button>`
+          : `<button onclick="waiterMarkServed('${o.id}')">Mark Served</button>`}
+      </div>`).join('');
+  });
+}
+
+function waiterAcceptOrder(id) {
+  const session = getStaffSession();
+  db.collection('orders').doc(id).update({ status: 'preparing', acceptedBy: (session && session.name) || '' });
+}
+function waiterMarkServed(id) {
+  db.collection('orders').doc(id).update({ status: 'served', servedAt: firebase.firestore.FieldValue.serverTimestamp() });
+}
+
+function waiterRenderTables() {
+  db.collection('tables').orderBy(firebase.firestore.FieldPath.documentId()).onSnapshot(snap => {
+    if (waiterActiveTab !== 'tables') return;
+    const wrap = document.getElementById('waiterContent');
+    if (snap.empty) { wrap.innerHTML = '<div class="empty-state">No tables set up yet. Ask admin to generate QR codes.</div>'; return; }
+    wrap.innerHTML = snap.docs.map(d => {
+      const t = d.data();
+      return `<div class="card row">
+        <span><strong>Table ${d.id.replace(/^T0*/,'')}</strong></span>
+        <span class="badge ${t.status || 'available'}">${t.status || 'available'}</span>
+      </div>`;
+    }).join('');
+  });
+}
+
+function waiterRenderCalls() {
+  db.collection('tables').where('waiterCall', '==', true).onSnapshot(snap => {
+    if (waiterActiveTab !== 'calls') return;
+    const wrap = document.getElementById('waiterContent');
+    if (snap.empty) { wrap.innerHTML = '<div class="empty-state">No active calls 🙌</div>'; return; }
+    wrap.innerHTML = snap.docs.map(d => `
+      <div class="card row">
+        <span>🔔 <strong>Table ${d.id.replace(/^T0*/,'')}</strong> needs assistance</span>
+        <button style="width:auto" onclick="waiterClearCall('${d.id}')">Resolved</button>
+      </div>`).join('');
+  });
+}
+function waiterClearCall(tableId) {
+  db.collection('tables').doc(tableId).update({ waiterCall: false });
+}
+
+function kitchenInit() {
+  kitchenListenOrders();
+  setInterval(kitchenRefreshTimers, 30000);
+}
+
+function kitchenListenOrders() {
+  db.collection('orders').where('status', 'in', ['new', 'preparing']).onSnapshot(snap => {
+    const orders = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+    const board = document.getElementById('kitchenBoard');
+    if (orders.length === 0) {
+      board.innerHTML = '<div class="empty-state" style="grid-column:1/-1">All caught up 🎉</div>';
+      return;
+    }
+    board.innerHTML = orders.map(o => `
+      <div class="card kcard ${o.status}" data-created="${o.createdAt?.seconds || ''}">
+        <h2>Table ${o.table.replace(/^T0*/,'')}</h2>
+        <span class="badge ${o.status}">${o.status === 'new' ? 'New' : 'Preparing'}</span>
+        <ul>${o.items.map(i => `<li>✔ ${i.qty} × ${i.name}</li>`).join('')}</ul>
+        ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
+        <p class="timer">${kitchenTimeAgo(o.createdAt)}</p>
+        ${o.status === 'new'
+          ? `<button onclick="kitchenStartPreparing('${o.id}')">Start Preparing</button>`
+          : `<button onclick="kitchenMarkReady('${o.id}')">Ready to Serve</button>`}
+      </div>`).join('');
+  });
+}
+
+function kitchenTimeAgo(ts) {
+  if (!ts) return 'just now';
+  const secs = Math.floor(Date.now() / 1000 - ts.seconds);
+  if (secs < 60) return secs + 's ago';
+  return Math.floor(secs / 60) + ' min ago';
+}
+function kitchenRefreshTimers() {
+  document.querySelectorAll('#kitchenBoard [data-created]').forEach(el => {
+    const secs = el.dataset.created;
+    if (secs) {
+      const p = el.querySelector('.timer');
+      if (p) p.textContent = kitchenTimeAgo({ seconds: parseInt(secs) });
+    }
+  });
+}
+
+function kitchenStartPreparing(id) {
+  db.collection('orders').doc(id).update({ status: 'preparing' });
+}
+function kitchenMarkReady(id) {
+  db.collection('orders').doc(id).update({ status: 'ready', readyAt: firebase.firestore.FieldValue.serverTimestamp() });
+}
+
+let cashierActiveTab = 'pending';
+let cashierPayingTable = null;
+let cashierPayingOrders = [];
+let cashierSelectedMethod = null;
+
+function cashierInit() {
+  const session = getStaffSession();
+  document.getElementById('cashierName').textContent = (session && session.name) || 'Cashier';
+  cashierRender();
+}
+
+function cashierSetTab(tab) {
+  cashierActiveTab = tab;
+  const nav = document.getElementById('view-cashier').querySelectorAll('.bottom-nav a');
+  nav.forEach(a => a.classList.remove('active'));
+  event.target.closest('a').classList.add('active');
+  cashierRender();
+}
+
+function cashierRender() {
+  if (cashierActiveTab === 'pending') cashierRenderPending();
+  else cashierRenderReport();
+}
+
+function cashierRenderPending() {
+  db.collection('orders').where('status', '==', 'served').onSnapshot(snap => {
+    if (cashierActiveTab !== 'pending') return;
+    const byTable = {};
+    snap.docs.forEach(d => {
+      const o = { id: d.id, ...d.data() };
+      if (!byTable[o.table]) byTable[o.table] = [];
+      byTable[o.table].push(o);
+    });
+    const wrap = document.getElementById('cashierContent');
+    const tables = Object.keys(byTable);
+    if (tables.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No bills pending 🎉</div>';
+      return;
+    }
+    wrap.innerHTML = tables.map(t => {
+      const orders = byTable[t];
+      const total = orders.reduce((s, o) => s + o.total, 0);
+      return `<div class="card">
+        <div class="row"><strong>Table ${t.replace(/^T0*/,'')}</strong><span class="badge served">${orders.length} order(s)</span></div>
+        <p class="small">₹${total} total</p>
+        <button onclick='cashierOpenPay(${JSON.stringify(t)}, ${JSON.stringify(orders).replace(/'/g, "&apos;")})'>Generate Bill</button>
+      </div>`;
+    }).join('');
+  });
+}
+
+function cashierOpenPay(table, orders) {
+  cashierPayingTable = table;
+  cashierPayingOrders = orders;
+  cashierSelectedMethod = null;
+  document.getElementById('payTable').textContent = table.replace(/^T0*/, '');
+  const allItems = orders.flatMap(o => o.items);
+  document.getElementById('payItems').innerHTML = allItems.map(i =>
+    `<div class="row small"><span>${i.name} × ${i.qty}</span><span>₹${i.price * i.qty}</span></div>`).join('');
+  const total = orders.reduce((s, o) => s + o.total, 0);
+  document.getElementById('payTotal').textContent = '₹' + total;
+  document.querySelectorAll('.pay-option button').forEach(b => b.classList.remove('selected'));
+  document.getElementById('paySheet').style.display = 'block';
+}
+
+function cashierSelectMethod(m) {
+  cashierSelectedMethod = m;
+  document.querySelectorAll('.pay-option button').forEach(b => b.classList.remove('selected'));
+  document.getElementById('pay' + m).classList.add('selected');
+}
+
+function cashierConfirmPayment() {
+  if (!cashierSelectedMethod) { alert('Please select a payment method'); return; }
+  const session = getStaffSession();
+  const total = cashierPayingOrders.reduce((s, o) => s + o.total, 0);
+  const batch = db.batch();
+  cashierPayingOrders.forEach(o => {
+    batch.update(db.collection('orders').doc(o.id), { status: 'billed' });
+  });
+  const billRef = db.collection('bills').doc();
+  batch.set(billRef, {
+    table: cashierPayingTable,
+    orderIds: cashierPayingOrders.map(o => o.id),
+    total,
+    paymentMethod: cashierSelectedMethod,
+    paymentStatus: 'paid',
+    cashier: (session && session.name) || '',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  batch.update(db.collection('tables').doc(cashierPayingTable), { status: 'available', billRequested: false });
+  batch.commit().then(() => {
+    closeSheet('paySheet');
+    window.print();
+  });
+}
+
+function cashierRenderReport() {
+  const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
+  db.collection('bills').where('createdAt', '>=', startOfDay).onSnapshot(snap => {
+    if (cashierActiveTab !== 'report') return;
+    const bills = snap.docs.map(d => d.data());
+    const total = bills.reduce((s, b) => s + b.total, 0);
+    const byMethod = {};
+    bills.forEach(b => byMethod[b.paymentMethod] = (byMethod[b.paymentMethod] || 0) + b.total);
+    const wrap = document.getElementById('cashierContent');
+    wrap.innerHTML = `
+      <div class="card">
+        <p class="small">Today's Sales</p>
+        <h2 style="color:var(--gold-soft);margin:4px 0">₹${total}</h2>
+        <p class="small">${bills.length} bills settled</p>
+      </div>
+      ${Object.entries(byMethod).map(([m, amt]) => `
+        <div class="card row"><span>${m}</span><strong>₹${amt}</strong></div>`).join('')}
+    `;
+  });
+}
+
+let adminActiveTab = 'overview';
+let adminCategoriesCache = [];
+
+function adminInit() {
+  const session = getStaffSession();
+  document.getElementById('adminName').textContent = (session && session.name) || 'Admin';
+  adminRender();
+}
+
+function adminSetTab(tab) {
+  adminActiveTab = tab;
+  const nav = document.getElementById('view-admin').querySelectorAll('.bottom-nav a');
+  nav.forEach(a => a.classList.remove('active'));
+  event.target.closest('a').classList.add('active');
+  document.getElementById('adminTabLabel').textContent = tab.charAt(0).toUpperCase() + tab.slice(1);
+  document.getElementById('adminFab').style.display = (tab === 'menu' || tab === 'users') ? 'flex' : 'none';
+  adminRender();
+}
+
+function adminRender() {
+  if (adminActiveTab === 'overview') adminRenderOverview();
+  else if (adminActiveTab === 'menu') adminRenderMenuAdmin();
+  else if (adminActiveTab === 'users') adminRenderUsers();
+  else if (adminActiveTab === 'tables') adminRenderQR();
+  else if (adminActiveTab === 'settings') adminRenderSettings();
+}
+
+function adminRenderOverview() {
+  const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
+  Promise.all([
+    db.collection('bills').where('createdAt', '>=', startOfDay).get(),
+    db.collection('orders').where('status', 'in', ['new','preparing','ready']).get(),
+    db.collection('tables').where('status', '==', 'occupied').get()
+  ]).then(([bills, activeOrders, occTables]) => {
+    if (adminActiveTab !== 'overview') return;
+    const salesToday = bills.docs.reduce((s, d) => s + d.data().total, 0);
+    document.getElementById('adminContent').innerHTML = `
+      <div class="stat-row">
+        <div class="card"><p class="small">Today's Sales</p><h2>₹${salesToday}</h2></div>
+        <div class="card"><p class="small">Active Orders</p><h2>${activeOrders.size}</h2></div>
+        <div class="card"><p class="small">Occupied Tables</p><h2>${occTables.size}</h2></div>
+      </div>
+      <div class="card">
+        <p class="small">Bills settled today: ${bills.size}</p>
+        <p class="small">Use the Menu, Users, and QR tabs below to manage your restaurant.</p>
+      </div>`;
+  });
+}
+
+function adminLoadCategoriesCache(cb) {
+  db.collection('categories').orderBy('order').get().then(snap => {
+    adminCategoriesCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (cb) cb();
+  });
+}
+
+function adminRenderMenuAdmin() {
+  adminLoadCategoriesCache(() => {
+    db.collection('menu').onSnapshot(snap => {
+      if (adminActiveTab !== 'menu') return;
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const wrap = document.getElementById('adminContent');
+      wrap.innerHTML = `
+        <button class="secondary" style="margin-bottom:12px" onclick="adminOpenCatSheet()">+ Manage Categories (${adminCategoriesCache.length})</button>
+      ` + (items.length === 0 ? '<div class="empty-state">No menu items yet. Tap + to add one.</div>' :
+        items.map(i => {
+          const cat = adminCategoriesCache.find(c => c.id === i.category);
+          return `<div class="card row">
+            <div>
+              <strong>${i.name}</strong> <span class="small">₹${i.price}</span>
+              <p class="small">${cat ? cat.name : 'Uncategorized'} ${i.available ? '' : '· Hidden'}</p>
+            </div>
+            <div style="display:flex;gap:6px">
+              <button style="width:auto" class="secondary" onclick='adminEditMenuItem(${JSON.stringify(i).replace(/'/g, "&apos;")})'>Edit</button>
+              <button style="width:auto" class="danger" onclick="adminDeleteMenuItem('${i.id}')">🗑</button>
+            </div>
+          </div>`;
+        }).join(''));
+    });
+  });
+}
+
+function adminOpenAddSheet() {
+  if (adminActiveTab === 'menu') adminOpenMenuSheet();
+  else if (adminActiveTab === 'users') adminOpenUserSheet();
+}
+
+function adminOpenMenuSheet() {
+  document.getElementById('menuSheetTitle').textContent = 'Add Menu Item';
+  document.getElementById('menuItemId').value = '';
+  document.getElementById('itemName').value = '';
+  document.getElementById('itemPrice').value = '';
+  document.getElementById('itemImage').value = '';
+  document.getElementById('itemDesc').value = '';
+  document.getElementById('itemAvailable').checked = true;
+  const sel = document.getElementById('itemCategory');
+  sel.innerHTML = adminCategoriesCache.map(c => `<option value="${c.id}">${c.name}</option>`).join('') || '<option value="">Add a category first</option>';
+  document.getElementById('menuSheet').style.display = 'block';
+}
+
+function adminEditMenuItem(item) {
+  adminOpenMenuSheet();
+  document.getElementById('menuSheetTitle').textContent = 'Edit Menu Item';
+  document.getElementById('menuItemId').value = item.id;
+  document.getElementById('itemName').value = item.name;
+  document.getElementById('itemCategory').value = item.category;
+  document.getElementById('itemPrice').value = item.price;
+  document.getElementById('itemImage').value = item.image || '';
+  document.getElementById('itemDesc').value = item.description || '';
+  document.getElementById('itemAvailable').checked = item.available;
+}
+
+function adminSaveMenuItem() {
+  const id = document.getElementById('menuItemId').value;
+  const data = {
+    name: document.getElementById('itemName').value.trim(),
+    category: document.getElementById('itemCategory').value,
+    price: parseFloat(document.getElementById('itemPrice').value) || 0,
+    image: document.getElementById('itemImage').value.trim(),
+    description: document.getElementById('itemDesc').value.trim(),
+    available: document.getElementById('itemAvailable').checked
+  };
+  if (!data.name || !data.category) { alert('Name and category are required'); return; }
+  const ref = id ? db.collection('menu').doc(id) : db.collection('menu').doc();
+  ref.set(data, { merge: true }).then(() => closeSheet('menuSheet'));
+}
+
+function adminDeleteMenuItem(id) {
+  if (confirm('Delete this menu item?')) db.collection('menu').doc(id).delete();
+}
+
+function adminOpenCatSheet() {
+  document.getElementById('catName').value = '';
+  document.getElementById('catSheet').style.display = 'block';
+}
+function adminSaveCategory() {
+  const name = document.getElementById('catName').value.trim();
+  if (!name) return;
+  db.collection('categories').add({ name, order: adminCategoriesCache.length }).then(() => {
+    closeSheet('catSheet');
+    adminLoadCategoriesCache(() => adminRenderMenuAdmin());
+  });
+}
+
+function adminRenderUsers() {
+  db.collection('users').onSnapshot(snap => {
+    if (adminActiveTab !== 'users') return;
+    const users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const wrap = document.getElementById('adminContent');
+    wrap.innerHTML = users.length === 0 ? '<div class="empty-state">No staff yet. Tap + to add one directly, or share the site link so staff can self-register.</div>' :
+      users.map(u => `<div class="card">
+        <div class="row">
+          <div><strong>${u.name}</strong><p class="small">${u.mobile}</p></div>
+          <span class="badge ${u.active ? 'served' : 'new'}">${u.active ? u.role : 'Pending'}</span>
+        </div>
+        <div class="row" style="gap:6px;margin-top:10px">
+          <select id="role-${u.id}" style="margin-bottom:0">
+            <option value="pending" ${u.role === 'pending' ? 'selected' : ''}>Pending</option>
+            <option value="waiter" ${u.role === 'waiter' ? 'selected' : ''}>Waiter</option>
+            <option value="kitchen" ${u.role === 'kitchen' ? 'selected' : ''}>Kitchen</option>
+            <option value="cashier" ${u.role === 'cashier' ? 'selected' : ''}>Cashier</option>
+            <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+          </select>
+        </div>
+        <div class="row" style="gap:6px;margin-top:10px">
+          <button style="width:auto" onclick="adminApproveUser('${u.id}')">Save Role &amp; Approve</button>
+          <button style="width:auto" class="secondary" onclick="adminToggleUser('${u.id}', ${!u.active})">${u.active ? 'Disable' : 'Enable'}</button>
+          <button style="width:auto" class="danger" onclick="adminDeleteUser('${u.id}')">🗑</button>
+        </div>
+      </div>`).join('');
+  });
+}
+
+function adminApproveUser(id) {
+  const role = document.getElementById('role-' + id).value;
+  db.collection('users').doc(id).update({ role, active: true }).then(() => toast('Role updated'));
+}
+function adminToggleUser(id, active) { db.collection('users').doc(id).update({ active }); }
+function adminDeleteUser(id) { if (confirm('Remove this staff member?')) db.collection('users').doc(id).delete(); }
+
+function adminOpenUserSheet() {
+  document.getElementById('userMobile').value = '';
+  document.getElementById('userName').value = '';
+  document.getElementById('userSheet').style.display = 'block';
+}
+function adminSaveUserDirect() {
+  const mobile = document.getElementById('userMobile').value.trim();
+  const name = document.getElementById('userName').value.trim();
+  const role = document.getElementById('userRole').value;
+  if (!/^\d{10}$/.test(mobile) || !name) { alert('A valid 10-digit mobile number and name are required'); return; }
+  db.collection('users').add({
+    mobile, name, role, active: true,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(() => closeSheet('userSheet'));
+}
+
+function adminRenderQR() {
+  const wrap = document.getElementById('adminContent');
+  wrap.innerHTML = `
+    <div class="card">
+      <p class="small">Site URL (edit if different)</p>
+      <input id="siteUrl" value="${location.origin}${location.pathname.replace('index.html','')}">
+      <div class="row">
+        <input id="tableCount" type="number" value="20" style="margin-bottom:0">
+        <button style="width:auto;margin-left:8px" onclick="adminGenerateAllQR()">Generate</button>
+      </div>
+    </div>
+    <div id="qrGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"></div>`;
+}
+
+function adminGenerateAllQR() {
+  const base = document.getElementById('siteUrl').value.trim();
+  const count = parseInt(document.getElementById('tableCount').value) || 10;
+  const grid = document.getElementById('qrGrid');
+  grid.innerHTML = '';
+  const batch = db.batch();
+  for (let i = 1; i <= count; i++) {
+    const tableId = 'T' + String(i).padStart(2, '0');
+    const url = base + 'index.html?table=' + tableId;
+    const box = document.createElement('div');
+    box.className = 'card qr-box';
+    box.innerHTML = `<strong>Table ${i}</strong><div id="qr-${tableId}"></div><p class="small">${tableId}</p>`;
+    grid.appendChild(box);
+    new QRCode(document.getElementById('qr-' + tableId), { text: url, width: 110, height: 110 });
+    batch.set(db.collection('tables').doc(tableId), { status: 'available' }, { merge: true });
+  }
+  batch.commit();
+}
+
+function adminRenderSettings() {
+  db.collection('settings').doc('restaurant').get().then(doc => {
+    if (adminActiveTab !== 'settings') return;
+    const s = doc.exists ? doc.data() : {};
+    document.getElementById('adminContent').innerHTML = `
+      <div class="card">
+        <p class="small">Restaurant Name</p>
+        <input id="settingName" value="${s.name || ''}" placeholder="Restaurant name">
+        <p class="small">GST Number (optional)</p>
+        <input id="settingGST" value="${s.gst || ''}" placeholder="GSTIN">
+        <p class="small">GST Rate % (optional)</p>
+        <input id="settingGSTRate" type="number" value="${s.gstRate || ''}" placeholder="e.g. 5">
+        <button onclick="adminSaveSettings()">Save Settings</button>
+      </div>
+      <div class="card">
+        <p class="small">Reports</p>
+        <button class="secondary" onclick="adminSetTab('overview')">View Today's Overview</button>
+      </div>`;
+  });
+}
+function adminSaveSettings() {
+  db.collection('settings').doc('restaurant').set({
+    name: document.getElementById('settingName').value.trim(),
+    gst: document.getElementById('settingGST').value.trim(),
+    gstRate: parseFloat(document.getElementById('settingGSTRate').value) || 0
+  }, { merge: true }).then(() => alert('Settings saved'));
+}
+
+appInit();
+</script>
+</body>
+</html>
