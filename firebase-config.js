@@ -4,12 +4,12 @@
 // Firebase project (Project Settings > General > Your apps > SDK setup)
 // ============================================================
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyBGQjsTN1OZSyCzkeFOUo5cm6P8OmCD0II",
+  authDomain: "projects-gavi.firebaseapp.com",
+  projectId: "projects-gavi",
+  storageBucket: "projects-gavi.firebasestorage.app",
+  messagingSenderId: "181348674237",
+  appId: "1:181348674237:web:f55ffc58fb8a748b7825d4"
 };
 
 firebase.initializeApp(firebaseConfig);
