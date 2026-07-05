@@ -40,30 +40,76 @@
   .fab { position: fixed; bottom: 90px; right: 18px; width: 54px; height: 54px; border-radius: 50%; font-size: 24px; z-index: 25; box-shadow: 0 6px 16px rgba(0,0,0,0.4); }
   .qr-box { text-align: center; padding: 14px; }
   .qr-box img, .qr-box canvas { background: white; padding: 8px; border-radius: 8px; }
-  .stat-row { display: flex; gap: 10px; }
-  .stat-row .card { flex: 1; text-align: center; }
+  .stat-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .stat-row .card { flex: 1; min-width: 100px; text-align: center; }
   .stat-row h2 { margin: 4px 0; color: var(--gold-soft); font-size: 22px; }
+  .pin-dots { display: flex; gap: 10px; justify-content: center; margin: 14px 0; }
+  .pin-dots input { width: 42px !important; height: 52px; text-align: center; font-size: 22px; margin-bottom: 0 !important; }
+  .call-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 60;
+    background: var(--red); color: #fff; padding: 14px 16px;
+    display: none; flex-direction: column; gap: 8px;
+  }
+  .call-banner .call-row { display: flex; justify-content: space-between; align-items: center; }
+  .call-banner button { width: auto; background: #fff; color: var(--red); padding: 8px 14px; }
+  .broadcast-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 55;
+    background: var(--amber); color: #1a1408; padding: 12px 16px;
+    display: none; justify-content: space-between; align-items: center; gap: 10px; font-weight: 600;
+  }
+  .broadcast-banner button { width: auto; background: #1a1408; color: #fff; padding: 6px 12px; }
+  .menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 16px; }
+  .menu-grid button { background: var(--bg-card); border: 1px solid var(--border); color: var(--text); padding: 20px 10px; border-radius: 12px; font-size: 15px; }
+  .filter-chips { display: flex; gap: 6px; overflow-x: auto; padding: 0 16px 12px; }
+  .filter-chips button { width: auto; white-space: nowrap; padding: 6px 12px; font-size: 12px; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-dim); }
+  .filter-chips button.active { background: var(--gold); color: #1a1408; border: none; }
+  .star-row { display: flex; gap: 6px; font-size: 28px; justify-content: center; margin: 10px 0; cursor: pointer; }
+  .star { opacity: 0.3; }
+  .star.filled { opacity: 1; }
 </style>
 </head>
 <body>
 
+<div class="broadcast-banner" id="broadcastBanner">
+  <span id="broadcastText"></span>
+  <button onclick="dismissBroadcast()">Dismiss</button>
+</div>
+
+<div class="call-banner" id="callBanner">
+  <div id="callRows"></div>
+</div>
+
 <div id="view-login" class="view container" style="padding-top:60px">
   <h1 style="text-align:center;color:var(--gold-soft)">🔐 Staff Login</h1>
-  <p class="small" style="text-align:center">Enter your mobile number to continue</p>
-  <input id="loginMobile" type="tel" inputmode="numeric" placeholder="10-digit mobile number" maxlength="10">
-  <button onclick="loginCheckMobile()">Continue</button>
-  <p id="loginError" style="text-align:center;color:var(--red);min-height:18px;font-size:13px"></p>
+
+  <div id="mobileBox">
+    <p class="small" style="text-align:center">Enter your mobile number to continue</p>
+    <input id="loginMobile" type="tel" inputmode="numeric" placeholder="10-digit mobile number" maxlength="10">
+    <button onclick="loginCheckMobile()">Continue</button>
+    <p id="loginError" style="text-align:center;color:var(--red);min-height:18px;font-size:13px"></p>
+  </div>
+
+  <div id="pinBox" style="display:none">
+    <p class="small" style="text-align:center">Enter your 6-digit PIN</p>
+    <input id="loginPin" type="password" inputmode="numeric" maxlength="6" placeholder="6-digit PIN" style="text-align:center;letter-spacing:6px;font-size:20px">
+    <button onclick="loginVerifyPin()">Login</button>
+    <button class="secondary" style="margin-top:8px" onclick="loginBackToMobile()">Back</button>
+    <p id="pinError" style="text-align:center;color:var(--red);min-height:18px;font-size:13px"></p>
+  </div>
 
   <div id="registerBox" style="display:none">
-    <p class="small" style="text-align:center">New here? Enter your name to request access</p>
+    <p class="small" style="text-align:center">New here? Set up your access request</p>
     <input id="registerName" placeholder="Full name">
+    <input id="registerPin" type="password" inputmode="numeric" maxlength="6" placeholder="Create a 6-digit PIN" style="text-align:center;letter-spacing:6px">
+    <input id="registerPinConfirm" type="password" inputmode="numeric" maxlength="6" placeholder="Confirm PIN" style="text-align:center;letter-spacing:6px">
     <button onclick="loginRegister()">Register</button>
+    <p id="registerError" style="text-align:center;color:var(--red);min-height:18px;font-size:13px"></p>
   </div>
 </div>
 
 <div id="view-pending" class="view container" style="padding-top:60px;text-align:center">
   <h1 style="color:var(--gold-soft)">⏳ Waiting for Approval</h1>
-  <p class="small">Your account is registered but not active yet. Ask your admin to approve you and assign your role in the Users tab of the admin dashboard.</p>
+  <p class="small">Your account is registered but not active yet. Ask your admin to approve you and assign your role in the Staff tab of the admin dashboard.</p>
   <button class="secondary" onclick="showView('login')">Back to Login</button>
 </div>
 
@@ -92,6 +138,7 @@
       <h2 style="margin-top:0;color:var(--gold-soft)">Your Order</h2>
       <div id="cartItems"></div>
       <textarea id="specialInstructions" placeholder="Special instructions (e.g. less spicy, no onion)"></textarea>
+      <input id="custMobileInput" type="tel" inputmode="numeric" maxlength="10" placeholder="Your mobile number (optional)">
       <div class="row" style="margin-bottom:14px">
         <strong>Total</strong>
         <strong id="cartTotal" style="color:var(--gold-soft)">₹0</strong>
@@ -124,6 +171,7 @@
     <a href="#" class="active" onclick="waiterSetTab('orders')"><span class="icon">🔔</span>Orders</a>
     <a href="#" onclick="waiterSetTab('tables')"><span class="icon">🍽️</span>Tables</a>
     <a href="#" onclick="waiterSetTab('calls')"><span class="icon">📣</span>Calls</a>
+    <a href="#" onclick="waiterSetTab('qr')"><span class="icon">🔲</span>QR</a>
   </div>
 </div>
 
@@ -144,6 +192,7 @@
   <div class="bottom-nav">
     <a href="#" class="active" onclick="cashierSetTab('pending')"><span class="icon">🧾</span>Pending</a>
     <a href="#" onclick="cashierSetTab('report')"><span class="icon">📊</span>Today</a>
+    <a href="#" onclick="cashierSetTab('history')"><span class="icon">🧻</span>Receipts</a>
   </div>
 </div>
 
@@ -151,12 +200,15 @@
   <div class="sheet-inner">
     <h2 style="margin-top:0;color:var(--gold-soft)">Table <span id="payTable"></span></h2>
     <div id="payItems"></div>
+    <p class="small">Discount (₹, optional)</p>
+    <input id="payDiscount" type="number" value="0" min="0">
     <div class="row" style="margin:12px 0"><strong>Total</strong><strong id="payTotal" style="color:var(--gold-soft)"></strong></div>
     <p class="small">Payment method</p>
     <div class="pay-option">
       <button id="payCash" onclick="cashierSelectMethod('Cash')">💵 Cash</button>
       <button id="payUPI" onclick="cashierSelectMethod('UPI')">📱 UPI</button>
       <button id="payCard" onclick="cashierSelectMethod('Card')">💳 Card</button>
+      <button id="payWallet" onclick="cashierSelectMethod('Wallet')">👛 Wallet</button>
     </div>
     <button onclick="cashierConfirmPayment()">Confirm Payment & Print Receipt</button>
     <button class="secondary" style="margin-top:8px" onclick="closeSheet('paySheet')">Cancel</button>
@@ -172,10 +224,10 @@
   <button class="fab" id="adminFab" onclick="adminOpenAddSheet()" style="display:none">+</button>
   <div class="bottom-nav">
     <a href="#" class="active" onclick="adminSetTab('overview')"><span class="icon">📊</span>Overview</a>
+    <a href="#" onclick="adminSetTab('orders')"><span class="icon">🧾</span>Orders</a>
     <a href="#" onclick="adminSetTab('menu')"><span class="icon">🍽️</span>Menu</a>
-    <a href="#" onclick="adminSetTab('users')"><span class="icon">👥</span>Users</a>
-    <a href="#" onclick="adminSetTab('tables')"><span class="icon">🔲</span>QR</a>
-    <a href="#" onclick="adminSetTab('settings')"><span class="icon">⚙️</span>More</a>
+    <a href="#" onclick="adminSetTab('staff')"><span class="icon">👥</span>Staff</a>
+    <a href="#" onclick="adminSetTab('more')"><span class="icon">⚙️</span>More</a>
   </div>
 </div>
 
@@ -208,6 +260,7 @@
     <h2 style="margin-top:0;color:var(--gold-soft)">Add Staff Directly</h2>
     <input id="userMobile" type="tel" inputmode="numeric" placeholder="10-digit mobile number" maxlength="10">
     <input id="userName" placeholder="Full name">
+    <input id="userPin" type="password" inputmode="numeric" maxlength="6" placeholder="6-digit PIN for this staff member">
     <select id="userRole">
       <option value="waiter">Waiter</option>
       <option value="kitchen">Kitchen</option>
@@ -227,6 +280,9 @@
 <script src="firebase-config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
+// ============================================================
+// ROUTER + SHARED HELPERS
+// ============================================================
 function getTableFromURL() {
   const params = new URLSearchParams(window.location.search);
   return params.get('table');
@@ -243,6 +299,7 @@ function getStaffSession() {
 }
 
 function doLogout() {
+  logActivity('logout', '');
   sessionStorage.removeItem('staffSession');
   location.href = location.pathname;
 }
@@ -253,6 +310,8 @@ function routeToRole(role) {
   else if (role === 'kitchen') { showView('kitchen'); kitchenInit(); }
   else if (role === 'cashier') { showView('cashier'); cashierInit(); }
   else { showView('pending'); }
+  startBroadcastListener();
+  startIdleTimer();
 }
 
 function appInit() {
@@ -280,22 +339,123 @@ function toast(msg) {
   setTimeout(() => t.remove(), 2200);
 }
 
-let pendingMobile = '';
-
-function showLoginError(msg) {
-  document.getElementById('loginError').textContent = msg;
+function logActivity(action, detail) {
+  const session = getStaffSession();
+  db.collection('activityLogs').add({
+    actor: (session && session.name) || 'Unknown',
+    role: (session && session.role) || '',
+    action, detail: detail || '',
+    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+  }).catch(() => {});
 }
+
+// ---- Idle session timeout (20 min) ----
+let lastActivityTime = Date.now();
+let idleTimerStarted = false;
+function startIdleTimer() {
+  if (idleTimerStarted) return;
+  idleTimerStarted = true;
+  ['click', 'keydown', 'touchstart'].forEach(evt => {
+    document.addEventListener(evt, () => { lastActivityTime = Date.now(); });
+  });
+  setInterval(() => {
+    if (getStaffSession() && Date.now() - lastActivityTime > 20 * 60 * 1000) {
+      alert('You have been logged out due to inactivity.');
+      doLogout();
+    }
+  }, 60000);
+}
+
+// ---- Broadcast banner (admin -> all staff) ----
+let lastSeenBroadcastId = sessionStorage.getItem('lastSeenBroadcastId') || '';
+function startBroadcastListener() {
+  db.collection('broadcast').doc('current').onSnapshot(doc => {
+    if (!doc.exists) return;
+    const data = doc.data();
+    const bannerId = (data.timestamp && data.timestamp.seconds) ? String(data.timestamp.seconds) : '';
+    if (data.active && bannerId !== lastSeenBroadcastId) {
+      document.getElementById('broadcastText').textContent = '📢 ' + data.text;
+      document.getElementById('broadcastBanner').style.display = 'flex';
+    }
+  });
+}
+function dismissBroadcast() {
+  db.collection('broadcast').doc('current').get().then(doc => {
+    if (doc.exists && doc.data().timestamp) {
+      lastSeenBroadcastId = String(doc.data().timestamp.seconds);
+      sessionStorage.setItem('lastSeenBroadcastId', lastSeenBroadcastId);
+    }
+  });
+  document.getElementById('broadcastBanner').style.display = 'none';
+}
+
+// ---- Beep sound for waiter call notifications ----
+let audioCtx = null;
+document.addEventListener('click', () => {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  } else if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+}, { once: false });
+
+function playBeep() {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = 880;
+  gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.25);
+}
+
+let callBeepInterval = null;
+let activeCallTables = [];
+function waiterListenCalls() {
+  db.collection('tables').where('waiterCall', '==', true).onSnapshot(snap => {
+    activeCallTables = snap.docs.map(d => d.id);
+    const banner = document.getElementById('callBanner');
+    const rows = document.getElementById('callRows');
+    if (activeCallTables.length === 0) {
+      banner.style.display = 'none';
+      if (callBeepInterval) { clearInterval(callBeepInterval); callBeepInterval = null; }
+      return;
+    }
+    banner.style.display = 'flex';
+    rows.innerHTML = activeCallTables.map(t => `
+      <div class="call-row">
+        <span>🔔 Table ${t.replace(/^T0*/,'')} needs assistance</span>
+        <button onclick="waiterClearCall('${t}')">Acknowledge</button>
+      </div>`).join('');
+    if (!callBeepInterval) {
+      playBeep();
+      callBeepInterval = setInterval(playBeep, 3000);
+    }
+  });
+}
+
+// ============================================================
+// LOGIN / REGISTER (mobile number + 6-digit PIN)
+// ============================================================
+let pendingMobile = '';
+let foundUser = null;
+let pinAttempts = 0;
+
+function showLoginError(msg) { document.getElementById('loginError').textContent = msg; }
+function showPinError(msg) { document.getElementById('pinError').textContent = msg; }
+function showRegisterError(msg) { document.getElementById('registerError').textContent = msg; }
 
 function loginCheckMobile() {
   const mobile = document.getElementById('loginMobile').value.trim();
-  if (!/^\d{10}$/.test(mobile)) {
-    showLoginError('Enter a valid 10-digit mobile number');
-    return;
-  }
+  if (!/^\d{10}$/.test(mobile)) { showLoginError('Enter a valid 10-digit mobile number'); return; }
   showLoginError('');
   db.collection('users').where('mobile', '==', mobile).limit(1).get().then(snap => {
     if (snap.empty) {
       pendingMobile = mobile;
+      document.getElementById('mobileBox').style.display = 'none';
       document.getElementById('registerBox').style.display = 'block';
     } else {
       const doc = snap.docs[0];
@@ -303,30 +463,64 @@ function loginCheckMobile() {
       if (!data.active || !data.role || data.role === 'pending') {
         showView('pending');
       } else {
-        const session = { id: doc.id, mobile: data.mobile, name: data.name, role: data.role };
-        sessionStorage.setItem('staffSession', JSON.stringify(session));
-        routeToRole(data.role);
+        foundUser = { id: doc.id, ...data };
+        pinAttempts = 0;
+        document.getElementById('mobileBox').style.display = 'none';
+        document.getElementById('loginPin').value = '';
+        showPinError('');
+        document.getElementById('pinBox').style.display = 'block';
       }
     }
   }).catch(err => showLoginError('Login failed: ' + err.message));
 }
 
+function loginVerifyPin() {
+  const pin = document.getElementById('loginPin').value.trim();
+  if (!/^\d{6}$/.test(pin)) { showPinError('Enter your 6-digit PIN'); return; }
+  if (pin === foundUser.pin) {
+    const session = { id: foundUser.id, mobile: foundUser.mobile, name: foundUser.name, role: foundUser.role };
+    sessionStorage.setItem('staffSession', JSON.stringify(session));
+    logActivity('login', '');
+    routeToRole(foundUser.role);
+  } else {
+    pinAttempts++;
+    if (pinAttempts >= 5) {
+      showPinError('Too many attempts. Please start over.');
+      loginBackToMobile();
+    } else {
+      showPinError('Incorrect PIN (' + (5 - pinAttempts) + ' attempts left)');
+    }
+  }
+}
+
+function loginBackToMobile() {
+  document.getElementById('pinBox').style.display = 'none';
+  document.getElementById('registerBox').style.display = 'none';
+  document.getElementById('mobileBox').style.display = 'block';
+  document.getElementById('loginMobile').value = '';
+  showLoginError('');
+}
+
 function loginRegister() {
   const name = document.getElementById('registerName').value.trim();
-  if (!name) { alert('Please enter your name'); return; }
+  const pin = document.getElementById('registerPin').value.trim();
+  const pinConfirm = document.getElementById('registerPinConfirm').value.trim();
+  if (!name) { showRegisterError('Please enter your name'); return; }
+  if (!/^\d{6}$/.test(pin)) { showRegisterError('PIN must be exactly 6 digits'); return; }
+  if (pin !== pinConfirm) { showRegisterError('PINs do not match'); return; }
   db.collection('users').add({
-    mobile: pendingMobile,
-    name,
-    role: 'pending',
-    active: false,
+    mobile: pendingMobile, name, pin,
+    role: 'pending', active: false,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   }).then(() => {
     document.getElementById('registerBox').style.display = 'none';
-    document.getElementById('registerName').value = '';
     showView('pending');
-  }).catch(err => alert('Registration failed: ' + err.message));
+  }).catch(err => showRegisterError('Registration failed: ' + err.message));
 }
 
+// ============================================================
+// CUSTOMER VIEW (QR ordering — no login)
+// ============================================================
 let custTableId = 'T01';
 let custMenuItems = [];
 let custCategories = [];
@@ -337,6 +531,8 @@ function custInit(table) {
   custTableId = table;
   custCart = JSON.parse(sessionStorage.getItem('cart_' + custTableId) || '{}');
   document.getElementById('tableLabel').textContent = 'Table ' + custTableId.replace(/^T0*/, '');
+  const savedMobile = localStorage.getItem('custMobile') || '';
+  document.getElementById('custMobileInput').value = savedMobile;
   custLoadSettings();
   custLoadCategories();
   custLoadMenu();
@@ -459,11 +655,15 @@ function custPlaceOrder() {
   const items = entries.map(([id, c]) => ({ itemId: id, name: c.name, price: c.price, qty: c.qty }));
   const total = items.reduce((s, i) => s + i.price * i.qty, 0);
   const notes = document.getElementById('specialInstructions').value.trim();
+  const mobile = document.getElementById('custMobileInput').value.trim();
+  if (mobile && !/^\d{10}$/.test(mobile)) { toast('Mobile number should be 10 digits, or leave it blank'); return; }
+  if (mobile) localStorage.setItem('custMobile', mobile);
 
   db.collection('orders').add({
     table: custTableId,
     items,
     notes,
+    customerMobile: mobile || null,
     total,
     status: 'new',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -496,9 +696,16 @@ function custShowOrderHistory() {
     Promise.all(ids.map(id => db.collection('orders').doc(id).get())).then(docs => {
       wrap.innerHTML = docs.filter(d => d.exists).reverse().map(d => {
         const o = d.data();
+        const canRate = (o.status === 'billed') && !localStorage.getItem('rated_' + d.id);
         return `<div class="card">
           <div class="row"><strong>${o.items.map(i=>i.name+' ×'+i.qty).join(', ')}</strong></div>
           <div class="row"><span class="small">₹${o.total}</span><span class="badge ${o.status}">${o.status}</span></div>
+          ${canRate ? `<div id="rate-${d.id}">
+            <div class="star-row" id="stars-${d.id}">
+              ${[1,2,3,4,5].map(n => `<span class="star" data-n="${n}" onclick="custSetStar('${d.id}',${n})">★</span>`).join('')}
+            </div>
+            <button onclick="custSubmitFeedback('${d.id}','${o.table}')">Submit Rating</button>
+          </div>` : ''}
         </div>`;
       }).join('') || '<div class="empty-state">No orders found.</div>';
     });
@@ -506,6 +713,26 @@ function custShowOrderHistory() {
   document.getElementById('historySheet').style.display = 'block';
 }
 function custCloseHistory() { document.getElementById('historySheet').style.display = 'none'; }
+
+let custStarValues = {};
+function custSetStar(orderId, n) {
+  custStarValues[orderId] = n;
+  document.querySelectorAll('#stars-' + orderId + ' .star').forEach(s => {
+    s.classList.toggle('filled', parseInt(s.dataset.n) <= n);
+  });
+}
+function custSubmitFeedback(orderId, table) {
+  const rating = custStarValues[orderId];
+  if (!rating) { toast('Please select a star rating'); return; }
+  db.collection('feedback').add({
+    orderId, table, rating,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(() => {
+    localStorage.setItem('rated_' + orderId, '1');
+    toast('Thank you for your feedback! 🙏');
+    document.getElementById('rate-' + orderId).innerHTML = '<p class="small">✅ Rated</p>';
+  });
+}
 
 function custCallWaiter() {
   db.collection('tables').doc(custTableId).set({
@@ -521,11 +748,15 @@ function custRequestBill() {
   }, { merge: true }).then(() => toast('🧾 Bill requested — cashier notified'));
 }
 
+// ============================================================
+// WAITER VIEW
+// ============================================================
 let waiterActiveTab = 'orders';
 
 function waiterInit() {
   const session = getStaffSession();
   document.getElementById('waiterName').textContent = (session && session.name) || 'Waiter';
+  waiterListenCalls();
   waiterRender();
 }
 
@@ -541,6 +772,7 @@ function waiterRender() {
   if (waiterActiveTab === 'orders') waiterRenderOrders();
   else if (waiterActiveTab === 'tables') waiterRenderTables();
   else if (waiterActiveTab === 'calls') waiterRenderCalls();
+  else if (waiterActiveTab === 'qr') waiterRenderQR();
 }
 
 function waiterRenderOrders() {
@@ -561,20 +793,35 @@ function waiterRenderOrders() {
         </div>
         <p>${o.items.map(i => i.qty + ' × ' + i.name).join(', ')}</p>
         ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
+        ${o.customerMobile ? `<p class="small">📱 ${o.customerMobile}</p>` : ''}
         <div class="row"><span class="small">₹${o.total}</span></div>
-        ${o.status === 'new'
-          ? `<button onclick="waiterAcceptOrder('${o.id}')">Accept Order</button>`
-          : `<button onclick="waiterMarkServed('${o.id}')">Mark Served</button>`}
+        <div class="row" style="gap:6px">
+          ${o.status === 'new'
+            ? `<button onclick="waiterAcceptOrder('${o.id}')">Accept Order</button>`
+            : `<button onclick="waiterMarkServed('${o.id}')">Mark Served</button>`}
+          ${o.status === 'new' ? `<button style="width:auto" class="danger" onclick="waiterCancelOrder('${o.id}')">Cancel</button>` : ''}
+        </div>
       </div>`).join('');
   });
 }
 
 function waiterAcceptOrder(id) {
   const session = getStaffSession();
-  db.collection('orders').doc(id).update({ status: 'preparing', acceptedBy: (session && session.name) || '' });
+  db.collection('orders').doc(id).update({
+    status: 'preparing',
+    acceptedBy: (session && session.name) || '',
+    acceptedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  logActivity('accept_order', id);
 }
 function waiterMarkServed(id) {
   db.collection('orders').doc(id).update({ status: 'served', servedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  logActivity('mark_served', id);
+}
+function waiterCancelOrder(id) {
+  if (!confirm('Cancel this order?')) return;
+  db.collection('orders').doc(id).update({ status: 'cancelled', cancelledAt: firebase.firestore.FieldValue.serverTimestamp() });
+  logActivity('cancel_order', id);
 }
 
 function waiterRenderTables() {
@@ -585,7 +832,7 @@ function waiterRenderTables() {
     wrap.innerHTML = snap.docs.map(d => {
       const t = d.data();
       return `<div class="card row">
-        <span><strong>Table ${d.id.replace(/^T0*/,'')}</strong></span>
+        <span><strong>Table ${d.id.replace(/^T0*/,'')}</strong> ${t.assignedWaiter ? '· ' + t.assignedWaiter : ''}</span>
         <span class="badge ${t.status || 'available'}">${t.status || 'available'}</span>
       </div>`;
     }).join('');
@@ -608,6 +855,33 @@ function waiterClearCall(tableId) {
   db.collection('tables').doc(tableId).update({ waiterCall: false });
 }
 
+function waiterRenderQR() {
+  db.collection('tables').orderBy(firebase.firestore.FieldPath.documentId()).get().then(snap => {
+    const options = snap.docs.map(d => `<option value="${d.id}">Table ${d.id.replace(/^T0*/,'')}</option>`).join('');
+    document.getElementById('waiterContent').innerHTML = `
+      <div class="card">
+        <p class="small">Select a table to generate its QR code</p>
+        <select id="waiterQrTable">${options || '<option value="T01">T01</option>'}</select>
+        <button onclick="waiterGenerateQR()">Generate QR</button>
+      </div>
+      <div id="waiterQrResult"></div>`;
+  });
+}
+function waiterGenerateQR() {
+  const tableId = document.getElementById('waiterQrTable').value;
+  const url = location.origin + location.pathname.replace('index.html','') + 'index.html?table=' + tableId;
+  document.getElementById('waiterQrResult').innerHTML = `
+    <div class="card qr-box">
+      <strong>Table ${tableId.replace(/^T0*/,'')}</strong>
+      <div id="waiterQrCanvas" style="display:flex;justify-content:center;margin:10px 0"></div>
+      <p class="small">Show this to the customer to scan</p>
+    </div>`;
+  new QRCode(document.getElementById('waiterQrCanvas'), { text: url, width: 180, height: 180 });
+}
+
+// ============================================================
+// KITCHEN VIEW
+// ============================================================
 function kitchenInit() {
   kitchenListenOrders();
   setInterval(kitchenRefreshTimers, 30000);
@@ -657,8 +931,12 @@ function kitchenStartPreparing(id) {
 }
 function kitchenMarkReady(id) {
   db.collection('orders').doc(id).update({ status: 'ready', readyAt: firebase.firestore.FieldValue.serverTimestamp() });
+  logActivity('mark_ready', id);
 }
 
+// ============================================================
+// CASHIER VIEW
+// ============================================================
 let cashierActiveTab = 'pending';
 let cashierPayingTable = null;
 let cashierPayingOrders = [];
@@ -680,7 +958,8 @@ function cashierSetTab(tab) {
 
 function cashierRender() {
   if (cashierActiveTab === 'pending') cashierRenderPending();
-  else cashierRenderReport();
+  else if (cashierActiveTab === 'report') cashierRenderReport();
+  else cashierRenderHistory();
 }
 
 function cashierRenderPending() {
@@ -715,6 +994,7 @@ function cashierOpenPay(table, orders) {
   cashierPayingOrders = orders;
   cashierSelectedMethod = null;
   document.getElementById('payTable').textContent = table.replace(/^T0*/, '');
+  document.getElementById('payDiscount').value = 0;
   const allItems = orders.flatMap(o => o.items);
   document.getElementById('payItems').innerHTML = allItems.map(i =>
     `<div class="row small"><span>${i.name} × ${i.qty}</span><span>₹${i.price * i.qty}</span></div>`).join('');
@@ -733,7 +1013,10 @@ function cashierSelectMethod(m) {
 function cashierConfirmPayment() {
   if (!cashierSelectedMethod) { alert('Please select a payment method'); return; }
   const session = getStaffSession();
-  const total = cashierPayingOrders.reduce((s, o) => s + o.total, 0);
+  const discount = parseFloat(document.getElementById('payDiscount').value) || 0;
+  const subtotal = cashierPayingOrders.reduce((s, o) => s + o.total, 0);
+  const total = Math.max(0, subtotal - discount);
+  const allItems = cashierPayingOrders.flatMap(o => o.items);
   const batch = db.batch();
   cashierPayingOrders.forEach(o => {
     batch.update(db.collection('orders').doc(o.id), { status: 'billed' });
@@ -742,7 +1025,8 @@ function cashierConfirmPayment() {
   batch.set(billRef, {
     table: cashierPayingTable,
     orderIds: cashierPayingOrders.map(o => o.id),
-    total,
+    items: allItems,
+    subtotal, discount, total,
     paymentMethod: cashierSelectedMethod,
     paymentStatus: 'paid',
     cashier: (session && session.name) || '',
@@ -750,6 +1034,7 @@ function cashierConfirmPayment() {
   });
   batch.update(db.collection('tables').doc(cashierPayingTable), { status: 'available', billRequested: false });
   batch.commit().then(() => {
+    logActivity('confirm_payment', cashierPayingTable + ' ₹' + total);
     closeSheet('paySheet');
     window.print();
   });
@@ -776,8 +1061,39 @@ function cashierRenderReport() {
   });
 }
 
+function cashierRenderHistory() {
+  db.collection('bills').orderBy('createdAt', 'desc').limit(30).get().then(snap => {
+    if (cashierActiveTab !== 'history') return;
+    const wrap = document.getElementById('cashierContent');
+    if (snap.empty) { wrap.innerHTML = '<div class="empty-state">No receipts yet.</div>'; return; }
+    wrap.innerHTML = snap.docs.map(d => {
+      const b = d.data();
+      return `<div class="card">
+        <div class="row"><strong>Table ${b.table.replace(/^T0*/,'')}</strong><span class="small">${b.paymentMethod}</span></div>
+        <div class="row"><span class="small">₹${b.total}${b.discount ? ' (₹' + b.discount + ' off)' : ''}</span>
+        <button style="width:auto" class="secondary" onclick='cashierReprint(${JSON.stringify(b).replace(/'/g, "&apos;")})'>Reprint</button></div>
+      </div>`;
+    }).join('');
+  });
+}
+function cashierReprint(bill) {
+  document.getElementById('payTable').textContent = bill.table.replace(/^T0*/,'');
+  document.getElementById('payItems').innerHTML = (bill.items || []).map(i =>
+    `<div class="row small"><span>${i.name} × ${i.qty}</span><span>₹${i.price * i.qty}</span></div>`).join('');
+  document.getElementById('payDiscount').value = bill.discount || 0;
+  document.getElementById('payTotal').textContent = '₹' + bill.total;
+  document.getElementById('paySheet').style.display = 'block';
+  document.querySelector('#paySheet button[onclick="cashierConfirmPayment()"]').style.display = 'none';
+  setTimeout(() => window.print(), 300);
+}
+
+// ============================================================
+// ADMIN VIEW
+// ============================================================
 let adminActiveTab = 'overview';
 let adminCategoriesCache = [];
+let adminMoreView = null;
+let adminOrderFilter = 'active';
 
 function adminInit() {
   const session = getStaffSession();
@@ -787,20 +1103,21 @@ function adminInit() {
 
 function adminSetTab(tab) {
   adminActiveTab = tab;
+  adminMoreView = null;
   const nav = document.getElementById('view-admin').querySelectorAll('.bottom-nav a');
   nav.forEach(a => a.classList.remove('active'));
   event.target.closest('a').classList.add('active');
   document.getElementById('adminTabLabel').textContent = tab.charAt(0).toUpperCase() + tab.slice(1);
-  document.getElementById('adminFab').style.display = (tab === 'menu' || tab === 'users') ? 'flex' : 'none';
+  document.getElementById('adminFab').style.display = (tab === 'menu' || tab === 'staff') ? 'flex' : 'none';
   adminRender();
 }
 
 function adminRender() {
   if (adminActiveTab === 'overview') adminRenderOverview();
+  else if (adminActiveTab === 'orders') adminRenderOrders();
   else if (adminActiveTab === 'menu') adminRenderMenuAdmin();
-  else if (adminActiveTab === 'users') adminRenderUsers();
-  else if (adminActiveTab === 'tables') adminRenderQR();
-  else if (adminActiveTab === 'settings') adminRenderSettings();
+  else if (adminActiveTab === 'staff') adminRenderStaff();
+  else if (adminActiveTab === 'more') adminRenderMore();
 }
 
 function adminRenderOverview() {
@@ -808,22 +1125,61 @@ function adminRenderOverview() {
   Promise.all([
     db.collection('bills').where('createdAt', '>=', startOfDay).get(),
     db.collection('orders').where('status', 'in', ['new','preparing','ready']).get(),
-    db.collection('tables').where('status', '==', 'occupied').get()
-  ]).then(([bills, activeOrders, occTables]) => {
+    db.collection('tables').where('status', '==', 'occupied').get(),
+    db.collection('orders').where('status', 'in', ['ready','served','billed']).get()
+  ]).then(([bills, activeOrders, occTables, timedOrders]) => {
     if (adminActiveTab !== 'overview') return;
     const salesToday = bills.docs.reduce((s, d) => s + d.data().total, 0);
+    let prepTimes = [];
+    timedOrders.docs.forEach(d => {
+      const o = d.data();
+      if (o.createdAt && o.readyAt) prepTimes.push(o.readyAt.seconds - o.createdAt.seconds);
+    });
+    const avgPrep = prepTimes.length ? Math.round(prepTimes.reduce((a,b)=>a+b,0) / prepTimes.length / 60) : 0;
     document.getElementById('adminContent').innerHTML = `
       <div class="stat-row">
         <div class="card"><p class="small">Today's Sales</p><h2>₹${salesToday}</h2></div>
         <div class="card"><p class="small">Active Orders</p><h2>${activeOrders.size}</h2></div>
         <div class="card"><p class="small">Occupied Tables</p><h2>${occTables.size}</h2></div>
+        <div class="card"><p class="small">Avg Prep Time</p><h2>${avgPrep}m</h2></div>
       </div>
       <div class="card">
         <p class="small">Bills settled today: ${bills.size}</p>
-        <p class="small">Use the Menu, Users, and QR tabs below to manage your restaurant.</p>
+        <p class="small">Use Orders, Menu, Staff, and More tabs below to manage your restaurant.</p>
       </div>`;
   });
 }
+
+function adminRenderOrders() {
+  const statusMap = { active: ['new','preparing','ready','served'], all: null };
+  let query = db.collection('orders');
+  const wrap = document.getElementById('adminContent');
+  wrap.innerHTML = `
+    <div class="filter-chips">
+      ${['active','new','preparing','ready','served','billed','cancelled','all'].map(f =>
+        `<button class="${adminOrderFilter===f?'active':''}" onclick="adminFilterOrders('${f}')">${f.charAt(0).toUpperCase()+f.slice(1)}</button>`).join('')}
+    </div>
+    <div id="ordersList"><div class="spinner"></div></div>`;
+  query.orderBy('createdAt','desc').limit(100).onSnapshot(snap => {
+    if (adminActiveTab !== 'orders') return;
+    let orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (adminOrderFilter === 'active') orders = orders.filter(o => ['new','preparing','ready','served'].includes(o.status));
+    else if (adminOrderFilter !== 'all') orders = orders.filter(o => o.status === adminOrderFilter);
+    const list = document.getElementById('ordersList');
+    if (!list) return;
+    if (orders.length === 0) { list.innerHTML = '<div class="empty-state">No orders in this filter.</div>'; return; }
+    list.innerHTML = orders.map(o => `
+      <div class="card">
+        <div class="row"><strong>Table ${o.table.replace(/^T0*/,'')}</strong><span class="badge ${o.status}">${o.status}</span></div>
+        <p class="small">${o.items.map(i=>i.qty+'×'+i.name).join(', ')}</p>
+        <div class="row small">
+          <span>₹${o.total}${o.customerMobile ? ' · 📱'+o.customerMobile : ''}</span>
+          <span>${o.acceptedBy ? 'Waiter: '+o.acceptedBy : ''}</span>
+        </div>
+      </div>`).join('');
+  });
+}
+function adminFilterOrders(f) { adminOrderFilter = f; adminRenderOrders(); }
 
 function adminLoadCategoriesCache(cb) {
   db.collection('categories').orderBy('order').get().then(snap => {
@@ -860,7 +1216,7 @@ function adminRenderMenuAdmin() {
 
 function adminOpenAddSheet() {
   if (adminActiveTab === 'menu') adminOpenMenuSheet();
-  else if (adminActiveTab === 'users') adminOpenUserSheet();
+  else if (adminActiveTab === 'staff') adminOpenUserSheet();
 }
 
 function adminOpenMenuSheet() {
@@ -900,11 +1256,17 @@ function adminSaveMenuItem() {
   };
   if (!data.name || !data.category) { alert('Name and category are required'); return; }
   const ref = id ? db.collection('menu').doc(id) : db.collection('menu').doc();
-  ref.set(data, { merge: true }).then(() => closeSheet('menuSheet'));
+  ref.set(data, { merge: true }).then(() => {
+    logActivity('save_menu_item', data.name);
+    closeSheet('menuSheet');
+  });
 }
 
 function adminDeleteMenuItem(id) {
-  if (confirm('Delete this menu item?')) db.collection('menu').doc(id).delete();
+  adminConfirmPin(() => {
+    db.collection('menu').doc(id).delete();
+    logActivity('delete_menu_item', id);
+  });
 }
 
 function adminOpenCatSheet() {
@@ -920,61 +1282,166 @@ function adminSaveCategory() {
   });
 }
 
-function adminRenderUsers() {
-  db.collection('users').onSnapshot(snap => {
-    if (adminActiveTab !== 'users') return;
-    const users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+// ---- PIN re-authentication for destructive actions ----
+function adminConfirmPin(onSuccess) {
+  const session = getStaffSession();
+  const pin = prompt('Re-enter your 6-digit PIN to confirm this action:');
+  if (!pin) return;
+  db.collection('users').doc(session.id).get().then(doc => {
+    if (doc.exists && doc.data().pin === pin.trim()) {
+      onSuccess();
+    } else {
+      alert('Incorrect PIN. Action cancelled.');
+    }
+  });
+}
+
+// ---- STAFF directory (merged Users + directory info) ----
+function adminRenderStaff() {
+  Promise.all([
+    db.collection('users').get(),
+    db.collection('tables').get(),
+    db.collection('orders').where('status', 'in', ['new','preparing','ready']).get()
+  ]).then(([usersSnap, tablesSnap, ordersSnap]) => {
+    if (adminActiveTab !== 'staff') return;
+    const users = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const tables = tablesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const orders = ordersSnap.docs.map(d => d.data());
     const wrap = document.getElementById('adminContent');
     wrap.innerHTML = users.length === 0 ? '<div class="empty-state">No staff yet. Tap + to add one directly, or share the site link so staff can self-register.</div>' :
-      users.map(u => `<div class="card">
-        <div class="row">
-          <div><strong>${u.name}</strong><p class="small">${u.mobile}</p></div>
-          <span class="badge ${u.active ? 'served' : 'new'}">${u.active ? u.role : 'Pending'}</span>
-        </div>
-        <div class="row" style="gap:6px;margin-top:10px">
-          <select id="role-${u.id}" style="margin-bottom:0">
-            <option value="pending" ${u.role === 'pending' ? 'selected' : ''}>Pending</option>
-            <option value="waiter" ${u.role === 'waiter' ? 'selected' : ''}>Waiter</option>
-            <option value="kitchen" ${u.role === 'kitchen' ? 'selected' : ''}>Kitchen</option>
-            <option value="cashier" ${u.role === 'cashier' ? 'selected' : ''}>Cashier</option>
-            <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
-          </select>
-        </div>
-        <div class="row" style="gap:6px;margin-top:10px">
-          <button style="width:auto" onclick="adminApproveUser('${u.id}')">Save Role &amp; Approve</button>
-          <button style="width:auto" class="secondary" onclick="adminToggleUser('${u.id}', ${!u.active})">${u.active ? 'Disable' : 'Enable'}</button>
-          <button style="width:auto" class="danger" onclick="adminDeleteUser('${u.id}')">🗑</button>
-        </div>
-      </div>`).join('');
+      users.map(u => {
+        const assignedTables = tables.filter(t => t.assignedWaiter === u.name).map(t => t.id.replace(/^T0*/,''));
+        const activeOrderCount = orders.filter(o => o.acceptedBy === u.name).length;
+        return `<div class="card">
+          <div class="row">
+            <div><strong>${u.name}</strong><p class="small">${u.mobile}</p></div>
+            <span class="badge ${u.active ? 'served' : 'new'}">${u.active ? u.role : 'Pending'}</span>
+          </div>
+          ${u.role === 'waiter' && u.active ? `<p class="small">Tables: ${assignedTables.join(', ') || 'none'} · Active orders: ${activeOrderCount}</p>` : ''}
+          <div class="row" style="gap:6px;margin-top:10px">
+            <select id="role-${u.id}" style="margin-bottom:0">
+              <option value="pending" ${u.role === 'pending' ? 'selected' : ''}>Pending</option>
+              <option value="waiter" ${u.role === 'waiter' ? 'selected' : ''}>Waiter</option>
+              <option value="kitchen" ${u.role === 'kitchen' ? 'selected' : ''}>Kitchen</option>
+              <option value="cashier" ${u.role === 'cashier' ? 'selected' : ''}>Cashier</option>
+              <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+            </select>
+          </div>
+          <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">
+            <button style="width:auto" onclick="adminApproveUser('${u.id}')">Save Role &amp; Approve</button>
+            <button style="width:auto" class="secondary" onclick="adminToggleUser('${u.id}', ${!u.active})">${u.active ? 'Disable' : 'Enable'}</button>
+            <button style="width:auto" class="secondary" onclick="adminResetPin('${u.id}')">Reset PIN</button>
+            <button style="width:auto" class="danger" onclick="adminDeleteUser('${u.id}')">🗑</button>
+          </div>
+        </div>`;
+      }).join('');
   });
 }
 
 function adminApproveUser(id) {
   const role = document.getElementById('role-' + id).value;
-  db.collection('users').doc(id).update({ role, active: true }).then(() => toast('Role updated'));
+  db.collection('users').doc(id).update({ role, active: true }).then(() => {
+    logActivity('approve_user', id + ' -> ' + role);
+    toast('Role updated');
+  });
 }
-function adminToggleUser(id, active) { db.collection('users').doc(id).update({ active }); }
-function adminDeleteUser(id) { if (confirm('Remove this staff member?')) db.collection('users').doc(id).delete(); }
+function adminToggleUser(id, active) {
+  db.collection('users').doc(id).update({ active });
+  logActivity('toggle_user', id + ' active=' + active);
+}
+function adminDeleteUser(id) {
+  adminConfirmPin(() => {
+    db.collection('users').doc(id).delete();
+    logActivity('delete_user', id);
+  });
+}
+function adminResetPin(id) {
+  const newPin = prompt('Enter a new 6-digit PIN for this staff member:');
+  if (!newPin || !/^\d{6}$/.test(newPin.trim())) { alert('PIN must be exactly 6 digits'); return; }
+  db.collection('users').doc(id).update({ pin: newPin.trim() }).then(() => {
+    logActivity('reset_pin', id);
+    toast('PIN updated');
+  });
+}
 
 function adminOpenUserSheet() {
   document.getElementById('userMobile').value = '';
   document.getElementById('userName').value = '';
+  document.getElementById('userPin').value = '';
   document.getElementById('userSheet').style.display = 'block';
 }
 function adminSaveUserDirect() {
   const mobile = document.getElementById('userMobile').value.trim();
   const name = document.getElementById('userName').value.trim();
+  const pin = document.getElementById('userPin').value.trim();
   const role = document.getElementById('userRole').value;
   if (!/^\d{10}$/.test(mobile) || !name) { alert('A valid 10-digit mobile number and name are required'); return; }
+  if (!/^\d{6}$/.test(pin)) { alert('PIN must be exactly 6 digits'); return; }
   db.collection('users').add({
-    mobile, name, role, active: true,
+    mobile, name, pin, role, active: true,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   }).then(() => closeSheet('userSheet'));
 }
 
-function adminRenderQR() {
+// ---- MORE menu (Tables, QR, Feedback, Logs, Performance, Broadcast, Settings) ----
+function adminRenderMore() {
   const wrap = document.getElementById('adminContent');
-  wrap.innerHTML = `
+  if (!adminMoreView) {
+    wrap.innerHTML = `<div class="menu-grid">
+      <button onclick="adminOpenMore('tables')">🔲 Tables</button>
+      <button onclick="adminOpenMore('qr')">🔳 Bulk QR Codes</button>
+      <button onclick="adminOpenMore('feedback')">⭐ Feedback</button>
+      <button onclick="adminOpenMore('logs')">📜 Activity Log</button>
+      <button onclick="adminOpenMore('performance')">📈 Performance</button>
+      <button onclick="adminOpenMore('broadcast')">📢 Broadcast</button>
+      <button onclick="adminOpenMore('settings')">⚙️ Settings</button>
+    </div>`;
+    return;
+  }
+  wrap.innerHTML = '<button class="secondary" style="margin-bottom:12px" onclick="adminOpenMore(null)">← Back</button><div id="moreContent"><div class="spinner"></div></div>';
+  if (adminMoreView === 'tables') adminRenderTables();
+  else if (adminMoreView === 'qr') adminRenderQR();
+  else if (adminMoreView === 'feedback') adminRenderFeedback();
+  else if (adminMoreView === 'logs') adminRenderLogs();
+  else if (adminMoreView === 'performance') adminRenderPerformance();
+  else if (adminMoreView === 'broadcast') adminRenderBroadcast();
+  else if (adminMoreView === 'settings') adminRenderSettings();
+}
+function adminOpenMore(view) { adminMoreView = view; adminRenderMore(); }
+
+function adminRenderTables() {
+  Promise.all([db.collection('tables').get(), db.collection('users').where('role','==','waiter').get()]).then(([tSnap, wSnap]) => {
+    if (adminMoreView !== 'tables') return;
+    const waiters = wSnap.docs.map(d => d.data().name);
+    const el = document.getElementById('moreContent');
+    if (!el) return;
+    el.innerHTML = tSnap.docs.map(d => {
+      const t = d.data();
+      return `<div class="card">
+        <div class="row"><strong>Table ${d.id.replace(/^T0*/,'')}</strong></div>
+        <div class="row" style="gap:6px;margin-top:6px">
+          <select id="tstatus-${d.id}" style="margin-bottom:0">
+            ${['available','occupied','reserved','cleaning'].map(s => `<option value="${s}" ${t.status===s?'selected':''}>${s}</option>`).join('')}
+          </select>
+          <select id="twaiter-${d.id}" style="margin-bottom:0">
+            <option value="">No waiter</option>
+            ${waiters.map(w => `<option value="${w}" ${t.assignedWaiter===w?'selected':''}>${w}</option>`).join('')}
+          </select>
+        </div>
+        <button style="margin-top:8px" onclick="adminSaveTable('${d.id}')">Save</button>
+      </div>`;
+    }).join('') || '<div class="empty-state">No tables yet. Use Bulk QR Codes to create them.</div>';
+  });
+}
+function adminSaveTable(id) {
+  const status = document.getElementById('tstatus-' + id).value;
+  const assignedWaiter = document.getElementById('twaiter-' + id).value;
+  db.collection('tables').doc(id).set({ status, assignedWaiter }, { merge: true }).then(() => toast('Table updated'));
+}
+
+function adminRenderQR() {
+  const el = document.getElementById('moreContent');
+  el.innerHTML = `
     <div class="card">
       <p class="small">Site URL (edit if different)</p>
       <input id="siteUrl" value="${location.origin}${location.pathname.replace('index.html','')}">
@@ -985,7 +1452,6 @@ function adminRenderQR() {
     </div>
     <div id="qrGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"></div>`;
 }
-
 function adminGenerateAllQR() {
   const base = document.getElementById('siteUrl').value.trim();
   const count = parseInt(document.getElementById('tableCount').value) || 10;
@@ -1005,11 +1471,86 @@ function adminGenerateAllQR() {
   batch.commit();
 }
 
+function adminRenderFeedback() {
+  db.collection('feedback').orderBy('createdAt','desc').limit(50).get().then(snap => {
+    if (adminMoreView !== 'feedback') return;
+    const el = document.getElementById('moreContent');
+    if (snap.empty) { el.innerHTML = '<div class="empty-state">No feedback yet.</div>'; return; }
+    const avg = snap.docs.reduce((s,d) => s + d.data().rating, 0) / snap.size;
+    el.innerHTML = `<div class="card"><p class="small">Average Rating</p><h2 style="color:var(--gold-soft)">${avg.toFixed(1)} ★</h2></div>` +
+      snap.docs.map(d => {
+        const f = d.data();
+        return `<div class="card row"><span>Table ${f.table.replace(/^T0*/,'')}</span><span>${'★'.repeat(f.rating)}${'☆'.repeat(5-f.rating)}</span></div>`;
+      }).join('');
+  });
+}
+
+function adminRenderLogs() {
+  db.collection('activityLogs').orderBy('timestamp','desc').limit(60).get().then(snap => {
+    if (adminMoreView !== 'logs') return;
+    const el = document.getElementById('moreContent');
+    if (snap.empty) { el.innerHTML = '<div class="empty-state">No activity yet.</div>'; return; }
+    el.innerHTML = snap.docs.map(d => {
+      const l = d.data();
+      return `<div class="card small"><strong>${l.actor}</strong> (${l.role}) — ${l.action} ${l.detail ? '· ' + l.detail : ''}</div>`;
+    }).join('');
+  });
+}
+
+function adminRenderPerformance() {
+  const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
+  db.collection('bills').where('createdAt','>=',startOfDay).get().then(snap => {
+    if (adminMoreView !== 'performance') return;
+    const bills = snap.docs.map(d => d.data());
+    const byCashier = {};
+    const itemCounts = {};
+    bills.forEach(b => {
+      byCashier[b.cashier] = (byCashier[b.cashier] || 0) + b.total;
+      (b.items || []).forEach(i => { itemCounts[i.name] = (itemCounts[i.name] || 0) + i.qty; });
+    });
+    const topItems = Object.entries(itemCounts).sort((a,b) => b[1]-a[1]).slice(0,5);
+    const el = document.getElementById('moreContent');
+    el.innerHTML = `
+      <div class="card"><p class="small">Sales by Cashier (Today)</p>
+        ${Object.entries(byCashier).map(([c,amt]) => `<div class="row small"><span>${c || 'Unknown'}</span><strong>₹${amt}</strong></div>`).join('') || '<p class="small">No sales yet today.</p>'}
+      </div>
+      <div class="card"><p class="small">Top Selling Items (Today)</p>
+        ${topItems.map(([n,q]) => `<div class="row small"><span>${n}</span><strong>${q}</strong></div>`).join('') || '<p class="small">No sales yet today.</p>'}
+      </div>`;
+  });
+}
+
+function adminRenderBroadcast() {
+  db.collection('broadcast').doc('current').get().then(doc => {
+    if (adminMoreView !== 'broadcast') return;
+    const el = document.getElementById('moreContent');
+    const current = doc.exists ? doc.data() : {};
+    el.innerHTML = `
+      <div class="card">
+        <p class="small">Send a message to all logged-in staff</p>
+        <textarea id="broadcastMsg" placeholder="e.g. Staff meeting at 5pm today">${current.active ? current.text : ''}</textarea>
+        <button onclick="adminSendBroadcast()">Send to All Staff</button>
+        ${current.active ? '<button class="secondary" style="margin-top:8px" onclick="adminClearBroadcast()">Clear Current Broadcast</button>' : ''}
+      </div>`;
+  });
+}
+function adminSendBroadcast() {
+  const text = document.getElementById('broadcastMsg').value.trim();
+  if (!text) return;
+  db.collection('broadcast').doc('current').set({
+    text, active: true, timestamp: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(() => { toast('Broadcast sent'); logActivity('broadcast', text); });
+}
+function adminClearBroadcast() {
+  db.collection('broadcast').doc('current').set({ active: false }, { merge: true }).then(() => adminRenderBroadcast());
+}
+
 function adminRenderSettings() {
   db.collection('settings').doc('restaurant').get().then(doc => {
-    if (adminActiveTab !== 'settings') return;
+    if (adminMoreView !== 'settings') return;
     const s = doc.exists ? doc.data() : {};
-    document.getElementById('adminContent').innerHTML = `
+    const el = document.getElementById('moreContent');
+    el.innerHTML = `
       <div class="card">
         <p class="small">Restaurant Name</p>
         <input id="settingName" value="${s.name || ''}" placeholder="Restaurant name">
@@ -1018,10 +1559,6 @@ function adminRenderSettings() {
         <p class="small">GST Rate % (optional)</p>
         <input id="settingGSTRate" type="number" value="${s.gstRate || ''}" placeholder="e.g. 5">
         <button onclick="adminSaveSettings()">Save Settings</button>
-      </div>
-      <div class="card">
-        <p class="small">Reports</p>
-        <button class="secondary" onclick="adminSetTab('overview')">View Today's Overview</button>
       </div>`;
   });
 }
