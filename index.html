@@ -32,9 +32,9 @@
   .kcard { border-top: 4px solid var(--blue); }
   .kcard.preparing { border-top-color: var(--amber); }
   .kcard h2 { margin: 0 0 8px; font-size: 22px; }
-  .kcard li { font-size: 16px; margin-bottom: 4px; }
+  .kcard li { font-size: 16px; margin-bottom: 4px; display:flex; justify-content:space-between; align-items:center; gap:6px; }
   .timer { font-size: 12px; color: var(--text-dim); }
-  .pay-option { display: flex; gap: 10px; margin-bottom: 10px; }
+  .pay-option { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
   .pay-option button { background: var(--bg-card); border: 1px solid var(--border); color: var(--text); }
   .pay-option button.selected { background: var(--gold); color: #1a1408; border: none; }
   .fab { position: fixed; bottom: 90px; right: 18px; width: 54px; height: 54px; border-radius: 50%; font-size: 24px; z-index: 25; box-shadow: 0 6px 16px rgba(0,0,0,0.4); }
@@ -45,18 +45,14 @@
   .stat-row h2 { margin: 4px 0; color: var(--gold-soft); font-size: 22px; }
   .pin-dots { display: flex; gap: 10px; justify-content: center; margin: 14px 0; }
   .pin-dots input { width: 42px !important; height: 52px; text-align: center; font-size: 22px; margin-bottom: 0 !important; }
-  .call-banner {
-    position: fixed; top: 0; left: 0; right: 0; z-index: 60;
-    background: var(--red); color: #fff; padding: 14px 16px;
-    display: none; flex-direction: column; gap: 8px;
-  }
-  .call-banner .call-row { display: flex; justify-content: space-between; align-items: center; }
+  #topBanners { position: fixed; top: 0; left: 0; right: 0; z-index: 60; display: flex; flex-direction: column; }
+  .broadcast-banner, .call-banner, .ready-banner { display: none; padding: 14px 16px; gap: 8px; }
+  .broadcast-banner { background: var(--amber); color: #1a1408; flex-direction: row; justify-content: space-between; align-items: center; font-weight: 600; }
+  .call-banner { background: var(--red); color: #fff; flex-direction: column; }
+  .ready-banner { background: var(--amber); color: #1a1408; flex-direction: column; }
+  .call-banner .call-row, .ready-banner .call-row { display: flex; justify-content: space-between; align-items: center; }
   .call-banner button { width: auto; background: #fff; color: var(--red); padding: 8px 14px; }
-  .broadcast-banner {
-    position: fixed; top: 0; left: 0; right: 0; z-index: 55;
-    background: var(--amber); color: #1a1408; padding: 12px 16px;
-    display: none; justify-content: space-between; align-items: center; gap: 10px; font-weight: 600;
-  }
+  .ready-banner button { width: auto; background: #fff; color: #1a1408; padding: 8px 14px; }
   .broadcast-banner button { width: auto; background: #1a1408; color: #fff; padding: 6px 12px; }
   .menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 16px; }
   .menu-grid button { background: var(--bg-card); border: 1px solid var(--border); color: var(--text); padding: 20px 10px; border-radius: 12px; font-size: 15px; }
@@ -66,17 +62,23 @@
   .star-row { display: flex; gap: 6px; font-size: 28px; justify-content: center; margin: 10px 0; cursor: pointer; }
   .star { opacity: 0.3; }
   .star.filled { opacity: 1; }
+  .mini-x { width: auto !important; padding: 2px 8px !important; font-size: 11px !important; }
+  .cancelled-item { text-decoration: line-through; color: var(--text-dim); }
 </style>
 </head>
 <body>
 
-<div class="broadcast-banner" id="broadcastBanner">
-  <span id="broadcastText"></span>
-  <button onclick="dismissBroadcast()">Dismiss</button>
-</div>
-
-<div class="call-banner" id="callBanner">
-  <div id="callRows"></div>
+<div id="topBanners">
+  <div class="broadcast-banner" id="broadcastBanner">
+    <span id="broadcastText"></span>
+    <button onclick="dismissBroadcast()">Dismiss</button>
+  </div>
+  <div class="call-banner" id="callBanner">
+    <div id="callRows"></div>
+  </div>
+  <div class="ready-banner" id="readyBanner">
+    <div id="readyRows"></div>
+  </div>
 </div>
 
 <div id="view-login" class="view container" style="padding-top:60px">
@@ -183,19 +185,6 @@
   <div class="board" id="kitchenBoard"></div>
 </div>
 
-<div id="view-cashier" class="view">
-  <div class="topbar">
-    <div><h1 id="cashierName">Cashier</h1><div class="sub">Pending bills</div></div>
-    <button class="secondary" style="width:auto" onclick="doLogout()">Logout</button>
-  </div>
-  <div class="container" id="cashierContent"><div class="spinner"></div></div>
-  <div class="bottom-nav">
-    <a href="#" class="active" onclick="cashierSetTab('pending')"><span class="icon">🧾</span>Pending</a>
-    <a href="#" onclick="cashierSetTab('report')"><span class="icon">📊</span>Today</a>
-    <a href="#" onclick="cashierSetTab('history')"><span class="icon">🧻</span>Receipts</a>
-  </div>
-</div>
-
 <div class="sheet" id="paySheet">
   <div class="sheet-inner">
     <h2 style="margin-top:0;color:var(--gold-soft)">Table <span id="payTable"></span></h2>
@@ -210,7 +199,7 @@
       <button id="payCard" onclick="cashierSelectMethod('Card')">💳 Card</button>
       <button id="payWallet" onclick="cashierSelectMethod('Wallet')">👛 Wallet</button>
     </div>
-    <button onclick="cashierConfirmPayment()">Confirm Payment & Print Receipt</button>
+    <button id="payConfirmBtn" onclick="cashierConfirmPayment()">Confirm Payment & Print Receipt</button>
     <button class="secondary" style="margin-top:8px" onclick="closeSheet('paySheet')">Cancel</button>
   </div>
 </div>
@@ -227,6 +216,7 @@
     <a href="#" onclick="adminSetTab('orders')"><span class="icon">🧾</span>Orders</a>
     <a href="#" onclick="adminSetTab('menu')"><span class="icon">🍽️</span>Menu</a>
     <a href="#" onclick="adminSetTab('staff')"><span class="icon">👥</span>Staff</a>
+    <a href="#" onclick="adminSetTab('billing')"><span class="icon">💳</span>Billing</a>
     <a href="#" onclick="adminSetTab('more')"><span class="icon">⚙️</span>More</a>
   </div>
 </div>
@@ -241,6 +231,12 @@
     <input id="itemImage" placeholder="Image URL (optional)">
     <textarea id="itemDesc" placeholder="Short description (optional)"></textarea>
     <label class="row"><span>Available</span><input type="checkbox" id="itemAvailable" style="width:auto" checked></label>
+    <label class="row"><span>Ready to serve (no kitchen prep — tea, coffee, bottled drinks, etc.)</span><input type="checkbox" id="itemReadyToServe" style="width:auto"></label>
+    <p class="small">Scheduled availability (optional — leave blank to show all day, every day)</p>
+    <div class="row" style="gap:8px">
+      <input id="itemScheduleStart" type="time" style="margin-bottom:0">
+      <input id="itemScheduleEnd" type="time" style="margin-bottom:0">
+    </div>
     <button onclick="adminSaveMenuItem()">Save Item</button>
     <button class="secondary" style="margin-top:8px" onclick="closeSheet('menuSheet')">Cancel</button>
   </div>
@@ -305,10 +301,9 @@ function doLogout() {
 }
 
 function routeToRole(role) {
-  if (role === 'admin') { showView('admin'); adminInit(); }
+  if (role === 'admin' || role === 'cashier') { showView('admin'); adminInit(); }
   else if (role === 'waiter') { showView('waiter'); waiterInit(); }
   else if (role === 'kitchen') { showView('kitchen'); kitchenInit(); }
-  else if (role === 'cashier') { showView('cashier'); cashierInit(); }
   else { showView('pending'); }
   startBroadcastListener();
   startIdleTimer();
@@ -347,6 +342,34 @@ function logActivity(action, detail) {
     action, detail: detail || '',
     timestamp: firebase.firestore.FieldValue.serverTimestamp()
   }).catch(() => {});
+}
+
+// ---- Cancel an individual item within an order (waiter/kitchen) ----
+function cancelOrderItem(orderId, itemIndex) {
+  let reason = prompt('Reason for cancelling this item (required, e.g. "Item not available"):');
+  if (reason === null) return;
+  reason = reason.trim();
+  if (!reason) { alert('A cancellation reason is required.'); return; }
+  db.collection('orders').doc(orderId).get().then(doc => {
+    if (!doc.exists) return;
+    const o = doc.data();
+    const items = o.items;
+    items[itemIndex].cancelled = true;
+    items[itemIndex].cancelReason = reason;
+    const newTotal = items.reduce((s, i) => s + (i.cancelled ? 0 : i.price * i.qty), 0);
+    db.collection('orders').doc(orderId).update({ items, total: newTotal }).then(() => {
+      logActivity('cancel_item', o.table + ' - ' + items[itemIndex].name + ': ' + reason);
+    });
+  });
+}
+
+function renderItemsList(order, editable) {
+  return order.items.map((i, idx) => {
+    if (i.cancelled) {
+      return `<li class="cancelled-item"><span>${i.qty} × ${i.name} <span class="small">(cancelled: ${i.cancelReason})</span></span></li>`;
+    }
+    return `<li><span>${i.qty} × ${i.name}</span>${editable ? `<button class="danger mini-x" onclick="cancelOrderItem('${order.id}',${idx})">✕</button>` : ''}</li>`;
+  }).join('');
 }
 
 // ---- Idle session timeout (20 min) ----
@@ -389,7 +412,7 @@ function dismissBroadcast() {
   document.getElementById('broadcastBanner').style.display = 'none';
 }
 
-// ---- Beep sound for waiter call notifications ----
+// ---- Beep sound for waiter notifications ----
 let audioCtx = null;
 document.addEventListener('click', () => {
   if (!audioCtx) {
@@ -397,7 +420,7 @@ document.addEventListener('click', () => {
   } else if (audioCtx.state === 'suspended') {
     audioCtx.resume();
   }
-}, { once: false });
+});
 
 function playBeep() {
   if (!audioCtx) return;
@@ -433,6 +456,31 @@ function waiterListenCalls() {
     if (!callBeepInterval) {
       playBeep();
       callBeepInterval = setInterval(playBeep, 3000);
+    }
+  });
+}
+
+let readyBeepInterval = null;
+let activeReadyOrders = [];
+function waiterListenReady() {
+  db.collection('orders').where('status', '==', 'ready').onSnapshot(snap => {
+    activeReadyOrders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const banner = document.getElementById('readyBanner');
+    const rows = document.getElementById('readyRows');
+    if (activeReadyOrders.length === 0) {
+      banner.style.display = 'none';
+      if (readyBeepInterval) { clearInterval(readyBeepInterval); readyBeepInterval = null; }
+      return;
+    }
+    banner.style.display = 'flex';
+    rows.innerHTML = activeReadyOrders.map(o => `
+      <div class="call-row">
+        <span>🍽️ Table ${o.table.replace(/^T0*/,'')} is ready to serve</span>
+        <button onclick="waiterMarkServed('${o.id}')">Mark Served</button>
+      </div>`).join('');
+    if (!readyBeepInterval) {
+      playBeep();
+      readyBeepInterval = setInterval(playBeep, 4000);
     }
   });
 }
@@ -526,6 +574,7 @@ let custMenuItems = [];
 let custCategories = [];
 let custActiveCategory = 'all';
 let custCart = {};
+let custEstimatedPrepMinutes = 15;
 
 function custInit(table) {
   custTableId = table;
@@ -561,8 +610,10 @@ function custRenderCartBar() {
 function custLoadSettings() {
   db.collection('settings').doc('restaurant').get().then(doc => {
     if (doc.exists) {
-      document.getElementById('restaurantName').textContent = doc.data().name || 'Restaurant';
-      document.title = (doc.data().name || 'Restaurant') + ' | Menu';
+      const s = doc.data();
+      document.getElementById('restaurantName').textContent = s.name || 'Restaurant';
+      document.title = (s.name || 'Restaurant') + ' | Menu';
+      custEstimatedPrepMinutes = s.estimatedPrepMinutes || 15;
     }
   });
 }
@@ -600,11 +651,23 @@ function custLoadMenu() {
   });
 }
 
+function isItemScheduledNow(item) {
+  if (!item.scheduleStart || !item.scheduleEnd) return true;
+  const now = new Date();
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const [sh, sm] = item.scheduleStart.split(':').map(Number);
+  const [eh, em] = item.scheduleEnd.split(':').map(Number);
+  const start = sh * 60 + sm, end = eh * 60 + em;
+  if (start <= end) return cur >= start && cur <= end;
+  return cur >= start || cur <= end;
+}
+
 function custRenderMenu() {
-  const list = custActiveCategory === 'all' ? custMenuItems : custMenuItems.filter(i => i.category === custActiveCategory);
+  let list = custActiveCategory === 'all' ? custMenuItems : custMenuItems.filter(i => i.category === custActiveCategory);
+  list = list.filter(isItemScheduledNow);
   const wrap = document.getElementById('menuList');
   if (list.length === 0) {
-    wrap.innerHTML = '<div class="empty-state">No items in this category yet.</div>';
+    wrap.innerHTML = '<div class="empty-state">No items available right now.</div>';
     return;
   }
   wrap.innerHTML = list.map(item => {
@@ -627,7 +690,7 @@ function custRenderMenu() {
 
 function custChangeQty(itemId, delta) {
   const item = custMenuItems.find(i => i.id === itemId);
-  if (!custCart[itemId]) custCart[itemId] = { name: item.name, price: item.price, qty: 0 };
+  if (!custCart[itemId]) custCart[itemId] = { name: item.name, price: item.price, qty: 0, readyToServe: !!item.readyToServe };
   custCart[itemId].qty += delta;
   if (custCart[itemId].qty <= 0) delete custCart[itemId];
   custSaveCart();
@@ -652,10 +715,11 @@ function custCloseCart() { document.getElementById('cartSheet').style.display = 
 function custPlaceOrder() {
   const entries = Object.entries(custCart);
   if (entries.length === 0) return;
-  const items = entries.map(([id, c]) => ({ itemId: id, name: c.name, price: c.price, qty: c.qty }));
+  const items = entries.map(([id, c]) => ({ itemId: id, name: c.name, price: c.price, qty: c.qty, readyToServe: !!c.readyToServe }));
   const total = items.reduce((s, i) => s + i.price * i.qty, 0);
   const notes = document.getElementById('specialInstructions').value.trim();
   const mobile = document.getElementById('custMobileInput').value.trim();
+  const noKitchen = items.every(i => i.readyToServe);
   if (mobile && !/^\d{10}$/.test(mobile)) { toast('Mobile number should be 10 digits, or leave it blank'); return; }
   if (mobile) localStorage.setItem('custMobile', mobile);
 
@@ -665,6 +729,7 @@ function custPlaceOrder() {
     notes,
     customerMobile: mobile || null,
     total,
+    noKitchen,
     status: 'new',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   }).then(ref => {
@@ -697,9 +762,11 @@ function custShowOrderHistory() {
       wrap.innerHTML = docs.filter(d => d.exists).reverse().map(d => {
         const o = d.data();
         const canRate = (o.status === 'billed') && !localStorage.getItem('rated_' + d.id);
+        const showEta = !o.noKitchen && ['new', 'preparing'].includes(o.status);
         return `<div class="card">
-          <div class="row"><strong>${o.items.map(i=>i.name+' ×'+i.qty).join(', ')}</strong></div>
+          <ul style="padding-left:0;list-style:none">${renderItemsList({ id: d.id, items: o.items }, false)}</ul>
           <div class="row"><span class="small">₹${o.total}</span><span class="badge ${o.status}">${o.status}</span></div>
+          ${showEta ? `<p class="small">⏱ Estimated ready in ~${custEstimatedPrepMinutes} mins</p>` : ''}
           ${canRate ? `<div id="rate-${d.id}">
             <div class="star-row" id="stars-${d.id}">
               ${[1,2,3,4,5].map(n => `<span class="star" data-n="${n}" onclick="custSetStar('${d.id}',${n})">★</span>`).join('')}
@@ -757,6 +824,7 @@ function waiterInit() {
   const session = getStaffSession();
   document.getElementById('waiterName').textContent = (session && session.name) || 'Waiter';
   waiterListenCalls();
+  waiterListenReady();
   waiterRender();
 }
 
@@ -791,13 +859,14 @@ function waiterRenderOrders() {
           <strong>Table ${o.table.replace(/^T0*/,'')}</strong>
           <span class="badge ${o.status}">${o.status === 'new' ? 'New Order' : 'Ready to Serve'}</span>
         </div>
-        <p>${o.items.map(i => i.qty + ' × ' + i.name).join(', ')}</p>
+        ${o.noKitchen ? '<span class="badge available">No Kitchen — ready-to-serve items</span>' : ''}
+        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true)}</ul>
         ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
         ${o.customerMobile ? `<p class="small">📱 ${o.customerMobile}</p>` : ''}
         <div class="row"><span class="small">₹${o.total}</span></div>
         <div class="row" style="gap:6px">
           ${o.status === 'new'
-            ? `<button onclick="waiterAcceptOrder('${o.id}')">Accept Order</button>`
+            ? (o.noKitchen ? `<button onclick="waiterServeNow('${o.id}')">Serve Now</button>` : `<button onclick="waiterAcceptOrder('${o.id}')">Accept Order</button>`)
             : `<button onclick="waiterMarkServed('${o.id}')">Mark Served</button>`}
           ${o.status === 'new' ? `<button style="width:auto" class="danger" onclick="waiterCancelOrder('${o.id}')">Cancel</button>` : ''}
         </div>
@@ -814,12 +883,21 @@ function waiterAcceptOrder(id) {
   });
   logActivity('accept_order', id);
 }
+function waiterServeNow(id) {
+  const session = getStaffSession();
+  db.collection('orders').doc(id).update({
+    status: 'served',
+    acceptedBy: (session && session.name) || '',
+    servedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  logActivity('serve_direct_no_kitchen', id);
+}
 function waiterMarkServed(id) {
   db.collection('orders').doc(id).update({ status: 'served', servedAt: firebase.firestore.FieldValue.serverTimestamp() });
   logActivity('mark_served', id);
 }
 function waiterCancelOrder(id) {
-  if (!confirm('Cancel this order?')) return;
+  if (!confirm('Cancel this entire order?')) return;
   db.collection('orders').doc(id).update({ status: 'cancelled', cancelledAt: firebase.firestore.FieldValue.serverTimestamp() });
   logActivity('cancel_order', id);
 }
@@ -890,6 +968,7 @@ function kitchenInit() {
 function kitchenListenOrders() {
   db.collection('orders').where('status', 'in', ['new', 'preparing']).onSnapshot(snap => {
     const orders = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter(o => !o.noKitchen)
       .sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
     const board = document.getElementById('kitchenBoard');
     if (orders.length === 0) {
@@ -900,7 +979,7 @@ function kitchenListenOrders() {
       <div class="card kcard ${o.status}" data-created="${o.createdAt?.seconds || ''}">
         <h2>Table ${o.table.replace(/^T0*/,'')}</h2>
         <span class="badge ${o.status}">${o.status === 'new' ? 'New' : 'Preparing'}</span>
-        <ul>${o.items.map(i => `<li>✔ ${i.qty} × ${i.name}</li>`).join('')}</ul>
+        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true)}</ul>
         ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
         <p class="timer">${kitchenTimeAgo(o.createdAt)}</p>
         ${o.status === 'new'
@@ -935,59 +1014,11 @@ function kitchenMarkReady(id) {
 }
 
 // ============================================================
-// CASHIER VIEW
+// BILLING (shared by Admin + Cashier, inside the manager dashboard)
 // ============================================================
-let cashierActiveTab = 'pending';
 let cashierPayingTable = null;
 let cashierPayingOrders = [];
 let cashierSelectedMethod = null;
-
-function cashierInit() {
-  const session = getStaffSession();
-  document.getElementById('cashierName').textContent = (session && session.name) || 'Cashier';
-  cashierRender();
-}
-
-function cashierSetTab(tab) {
-  cashierActiveTab = tab;
-  const nav = document.getElementById('view-cashier').querySelectorAll('.bottom-nav a');
-  nav.forEach(a => a.classList.remove('active'));
-  event.target.closest('a').classList.add('active');
-  cashierRender();
-}
-
-function cashierRender() {
-  if (cashierActiveTab === 'pending') cashierRenderPending();
-  else if (cashierActiveTab === 'report') cashierRenderReport();
-  else cashierRenderHistory();
-}
-
-function cashierRenderPending() {
-  db.collection('orders').where('status', '==', 'served').onSnapshot(snap => {
-    if (cashierActiveTab !== 'pending') return;
-    const byTable = {};
-    snap.docs.forEach(d => {
-      const o = { id: d.id, ...d.data() };
-      if (!byTable[o.table]) byTable[o.table] = [];
-      byTable[o.table].push(o);
-    });
-    const wrap = document.getElementById('cashierContent');
-    const tables = Object.keys(byTable);
-    if (tables.length === 0) {
-      wrap.innerHTML = '<div class="empty-state">No bills pending 🎉</div>';
-      return;
-    }
-    wrap.innerHTML = tables.map(t => {
-      const orders = byTable[t];
-      const total = orders.reduce((s, o) => s + o.total, 0);
-      return `<div class="card">
-        <div class="row"><strong>Table ${t.replace(/^T0*/,'')}</strong><span class="badge served">${orders.length} order(s)</span></div>
-        <p class="small">₹${total} total</p>
-        <button onclick='cashierOpenPay(${JSON.stringify(t)}, ${JSON.stringify(orders).replace(/'/g, "&apos;")})'>Generate Bill</button>
-      </div>`;
-    }).join('');
-  });
-}
 
 function cashierOpenPay(table, orders) {
   cashierPayingTable = table;
@@ -995,7 +1026,8 @@ function cashierOpenPay(table, orders) {
   cashierSelectedMethod = null;
   document.getElementById('payTable').textContent = table.replace(/^T0*/, '');
   document.getElementById('payDiscount').value = 0;
-  const allItems = orders.flatMap(o => o.items);
+  document.getElementById('payConfirmBtn').style.display = 'block';
+  const allItems = orders.flatMap(o => o.items.filter(i => !i.cancelled));
   document.getElementById('payItems').innerHTML = allItems.map(i =>
     `<div class="row small"><span>${i.name} × ${i.qty}</span><span>₹${i.price * i.qty}</span></div>`).join('');
   const total = orders.reduce((s, o) => s + o.total, 0);
@@ -1016,7 +1048,7 @@ function cashierConfirmPayment() {
   const discount = parseFloat(document.getElementById('payDiscount').value) || 0;
   const subtotal = cashierPayingOrders.reduce((s, o) => s + o.total, 0);
   const total = Math.max(0, subtotal - discount);
-  const allItems = cashierPayingOrders.flatMap(o => o.items);
+  const allItems = cashierPayingOrders.flatMap(o => o.items.filter(i => !i.cancelled));
   const batch = db.batch();
   cashierPayingOrders.forEach(o => {
     batch.update(db.collection('orders').doc(o.id), { status: 'billed' });
@@ -1040,64 +1072,30 @@ function cashierConfirmPayment() {
   });
 }
 
-function cashierRenderReport() {
-  const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
-  db.collection('bills').where('createdAt', '>=', startOfDay).onSnapshot(snap => {
-    if (cashierActiveTab !== 'report') return;
-    const bills = snap.docs.map(d => d.data());
-    const total = bills.reduce((s, b) => s + b.total, 0);
-    const byMethod = {};
-    bills.forEach(b => byMethod[b.paymentMethod] = (byMethod[b.paymentMethod] || 0) + b.total);
-    const wrap = document.getElementById('cashierContent');
-    wrap.innerHTML = `
-      <div class="card">
-        <p class="small">Today's Sales</p>
-        <h2 style="color:var(--gold-soft);margin:4px 0">₹${total}</h2>
-        <p class="small">${bills.length} bills settled</p>
-      </div>
-      ${Object.entries(byMethod).map(([m, amt]) => `
-        <div class="card row"><span>${m}</span><strong>₹${amt}</strong></div>`).join('')}
-    `;
-  });
-}
-
-function cashierRenderHistory() {
-  db.collection('bills').orderBy('createdAt', 'desc').limit(30).get().then(snap => {
-    if (cashierActiveTab !== 'history') return;
-    const wrap = document.getElementById('cashierContent');
-    if (snap.empty) { wrap.innerHTML = '<div class="empty-state">No receipts yet.</div>'; return; }
-    wrap.innerHTML = snap.docs.map(d => {
-      const b = d.data();
-      return `<div class="card">
-        <div class="row"><strong>Table ${b.table.replace(/^T0*/,'')}</strong><span class="small">${b.paymentMethod}</span></div>
-        <div class="row"><span class="small">₹${b.total}${b.discount ? ' (₹' + b.discount + ' off)' : ''}</span>
-        <button style="width:auto" class="secondary" onclick='cashierReprint(${JSON.stringify(b).replace(/'/g, "&apos;")})'>Reprint</button></div>
-      </div>`;
-    }).join('');
-  });
-}
 function cashierReprint(bill) {
   document.getElementById('payTable').textContent = bill.table.replace(/^T0*/,'');
   document.getElementById('payItems').innerHTML = (bill.items || []).map(i =>
     `<div class="row small"><span>${i.name} × ${i.qty}</span><span>₹${i.price * i.qty}</span></div>`).join('');
   document.getElementById('payDiscount').value = bill.discount || 0;
   document.getElementById('payTotal').textContent = '₹' + bill.total;
+  document.getElementById('payConfirmBtn').style.display = 'none';
   document.getElementById('paySheet').style.display = 'block';
-  document.querySelector('#paySheet button[onclick="cashierConfirmPayment()"]').style.display = 'none';
   setTimeout(() => window.print(), 300);
 }
 
 // ============================================================
-// ADMIN VIEW
+// ADMIN / MANAGER VIEW (admin + cashier share this dashboard)
 // ============================================================
 let adminActiveTab = 'overview';
 let adminCategoriesCache = [];
 let adminMoreView = null;
 let adminOrderFilter = 'active';
+let adminBillingView = 'pending';
 
 function adminInit() {
   const session = getStaffSession();
-  document.getElementById('adminName').textContent = (session && session.name) || 'Admin';
+  const roleLabel = (session && session.role === 'cashier') ? 'Cashier' : 'Admin';
+  document.getElementById('adminName').textContent = (session && session.name) || roleLabel;
   adminRender();
 }
 
@@ -1117,6 +1115,7 @@ function adminRender() {
   else if (adminActiveTab === 'orders') adminRenderOrders();
   else if (adminActiveTab === 'menu') adminRenderMenuAdmin();
   else if (adminActiveTab === 'staff') adminRenderStaff();
+  else if (adminActiveTab === 'billing') adminRenderBilling();
   else if (adminActiveTab === 'more') adminRenderMore();
 }
 
@@ -1124,10 +1123,10 @@ function adminRenderOverview() {
   const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
   Promise.all([
     db.collection('bills').where('createdAt', '>=', startOfDay).get(),
-    db.collection('orders').where('status', 'in', ['new','preparing','ready']).get(),
     db.collection('tables').where('status', '==', 'occupied').get(),
-    db.collection('orders').where('status', 'in', ['ready','served','billed']).get()
-  ]).then(([bills, activeOrders, occTables, timedOrders]) => {
+    db.collection('orders').where('status', 'in', ['ready','served','billed']).get(),
+    db.collection('orders').where('createdAt', '>=', startOfDay).get()
+  ]).then(([bills, occTables, timedOrders, todayOrders]) => {
     if (adminActiveTab !== 'overview') return;
     const salesToday = bills.docs.reduce((s, d) => s + d.data().total, 0);
     let prepTimes = [];
@@ -1136,22 +1135,29 @@ function adminRenderOverview() {
       if (o.createdAt && o.readyAt) prepTimes.push(o.readyAt.seconds - o.createdAt.seconds);
     });
     const avgPrep = prepTimes.length ? Math.round(prepTimes.reduce((a,b)=>a+b,0) / prepTimes.length / 60) : 0;
+    let pending = 0, completed = 0, cancelled = 0;
+    todayOrders.docs.forEach(d => {
+      const st = d.data().status;
+      if (['new','preparing','ready','served'].includes(st)) pending++;
+      else if (st === 'billed') completed++;
+      else if (st === 'cancelled') cancelled++;
+    });
     document.getElementById('adminContent').innerHTML = `
       <div class="stat-row">
         <div class="card"><p class="small">Today's Sales</p><h2>₹${salesToday}</h2></div>
-        <div class="card"><p class="small">Active Orders</p><h2>${activeOrders.size}</h2></div>
+        <div class="card"><p class="small">Pending Orders</p><h2>${pending}</h2></div>
+        <div class="card"><p class="small">Completed Today</p><h2>${completed}</h2></div>
+        <div class="card"><p class="small">Cancelled Today</p><h2>${cancelled}</h2></div>
         <div class="card"><p class="small">Occupied Tables</p><h2>${occTables.size}</h2></div>
         <div class="card"><p class="small">Avg Prep Time</p><h2>${avgPrep}m</h2></div>
       </div>
       <div class="card">
-        <p class="small">Bills settled today: ${bills.size}</p>
-        <p class="small">Use Orders, Menu, Staff, and More tabs below to manage your restaurant.</p>
+        <p class="small">Use Orders, Menu, Staff, Billing and More tabs below to manage your restaurant.</p>
       </div>`;
   });
 }
 
 function adminRenderOrders() {
-  const statusMap = { active: ['new','preparing','ready','served'], all: null };
   let query = db.collection('orders');
   const wrap = document.getElementById('adminContent');
   wrap.innerHTML = `
@@ -1171,7 +1177,8 @@ function adminRenderOrders() {
     list.innerHTML = orders.map(o => `
       <div class="card">
         <div class="row"><strong>Table ${o.table.replace(/^T0*/,'')}</strong><span class="badge ${o.status}">${o.status}</span></div>
-        <p class="small">${o.items.map(i=>i.qty+'×'+i.name).join(', ')}</p>
+        ${o.noKitchen ? '<span class="badge available">No Kitchen</span>' : ''}
+        <ul style="padding-left:0;list-style:none">${renderItemsList(o, false)}</ul>
         <div class="row small">
           <span>₹${o.total}${o.customerMobile ? ' · 📱'+o.customerMobile : ''}</span>
           <span>${o.acceptedBy ? 'Waiter: '+o.acceptedBy : ''}</span>
@@ -1202,9 +1209,10 @@ function adminRenderMenuAdmin() {
           return `<div class="card row">
             <div>
               <strong>${i.name}</strong> <span class="small">₹${i.price}</span>
-              <p class="small">${cat ? cat.name : 'Uncategorized'} ${i.available ? '' : '· Hidden'}</p>
+              <p class="small">${cat ? cat.name : 'Uncategorized'} ${i.available ? '' : '· Hidden'} ${i.readyToServe ? '· Ready-to-serve' : ''} ${i.scheduleStart ? '· '+i.scheduleStart+'–'+i.scheduleEnd : ''}</p>
             </div>
-            <div style="display:flex;gap:6px">
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button style="width:auto" class="secondary" onclick="adminToggleMenuAvailability('${i.id}', ${!i.available})">${i.available ? 'Hide' : 'Show'}</button>
               <button style="width:auto" class="secondary" onclick='adminEditMenuItem(${JSON.stringify(i).replace(/'/g, "&apos;")})'>Edit</button>
               <button style="width:auto" class="danger" onclick="adminDeleteMenuItem('${i.id}')">🗑</button>
             </div>
@@ -1212,6 +1220,11 @@ function adminRenderMenuAdmin() {
         }).join(''));
     });
   });
+}
+
+function adminToggleMenuAvailability(id, available) {
+  db.collection('menu').doc(id).update({ available });
+  logActivity('toggle_menu_availability', id + ' -> ' + available);
 }
 
 function adminOpenAddSheet() {
@@ -1227,6 +1240,9 @@ function adminOpenMenuSheet() {
   document.getElementById('itemImage').value = '';
   document.getElementById('itemDesc').value = '';
   document.getElementById('itemAvailable').checked = true;
+  document.getElementById('itemReadyToServe').checked = false;
+  document.getElementById('itemScheduleStart').value = '';
+  document.getElementById('itemScheduleEnd').value = '';
   const sel = document.getElementById('itemCategory');
   sel.innerHTML = adminCategoriesCache.map(c => `<option value="${c.id}">${c.name}</option>`).join('') || '<option value="">Add a category first</option>';
   document.getElementById('menuSheet').style.display = 'block';
@@ -1242,6 +1258,9 @@ function adminEditMenuItem(item) {
   document.getElementById('itemImage').value = item.image || '';
   document.getElementById('itemDesc').value = item.description || '';
   document.getElementById('itemAvailable').checked = item.available;
+  document.getElementById('itemReadyToServe').checked = !!item.readyToServe;
+  document.getElementById('itemScheduleStart').value = item.scheduleStart || '';
+  document.getElementById('itemScheduleEnd').value = item.scheduleEnd || '';
 }
 
 function adminSaveMenuItem() {
@@ -1252,7 +1271,10 @@ function adminSaveMenuItem() {
     price: parseFloat(document.getElementById('itemPrice').value) || 0,
     image: document.getElementById('itemImage').value.trim(),
     description: document.getElementById('itemDesc').value.trim(),
-    available: document.getElementById('itemAvailable').checked
+    available: document.getElementById('itemAvailable').checked,
+    readyToServe: document.getElementById('itemReadyToServe').checked,
+    scheduleStart: document.getElementById('itemScheduleStart').value || null,
+    scheduleEnd: document.getElementById('itemScheduleEnd').value || null
   };
   if (!data.name || !data.category) { alert('Name and category are required'); return; }
   const ref = id ? db.collection('menu').doc(id) : db.collection('menu').doc();
@@ -1296,7 +1318,7 @@ function adminConfirmPin(onSuccess) {
   });
 }
 
-// ---- STAFF directory (merged Users + directory info) ----
+// ---- STAFF directory ----
 function adminRenderStaff() {
   Promise.all([
     db.collection('users').get(),
@@ -1383,9 +1405,88 @@ function adminSaveUserDirect() {
   }).then(() => closeSheet('userSheet'));
 }
 
+// ---- BILLING tab (Pending / Today / Receipts) ----
+function adminRenderBilling() {
+  const wrap = document.getElementById('adminContent');
+  wrap.innerHTML = `
+    <div class="filter-chips">
+      ${[['pending','Pending'],['report','Today'],['history','Receipts']].map(([v,l]) =>
+        `<button class="${adminBillingView===v?'active':''}" onclick="adminSetBillingView('${v}')">${l}</button>`).join('')}
+    </div>
+    <div id="billingContent"><div class="spinner"></div></div>`;
+  if (adminBillingView === 'pending') adminBillingRenderPending();
+  else if (adminBillingView === 'report') adminBillingRenderReport();
+  else adminBillingRenderHistory();
+}
+function adminSetBillingView(v) { adminBillingView = v; adminRenderBilling(); }
+
+function adminBillingRenderPending() {
+  db.collection('orders').where('status', '==', 'served').onSnapshot(snap => {
+    if (adminActiveTab !== 'billing' || adminBillingView !== 'pending') return;
+    const byTable = {};
+    snap.docs.forEach(d => {
+      const o = { id: d.id, ...d.data() };
+      if (!byTable[o.table]) byTable[o.table] = [];
+      byTable[o.table].push(o);
+    });
+    const el = document.getElementById('billingContent');
+    if (!el) return;
+    const tables = Object.keys(byTable);
+    if (tables.length === 0) { el.innerHTML = '<div class="empty-state">No bills pending 🎉</div>'; return; }
+    el.innerHTML = tables.map(t => {
+      const orders = byTable[t];
+      const total = orders.reduce((s, o) => s + o.total, 0);
+      return `<div class="card">
+        <div class="row"><strong>Table ${t.replace(/^T0*/,'')}</strong><span class="badge served">${orders.length} order(s)</span></div>
+        <p class="small">₹${total} total</p>
+        <button onclick='cashierOpenPay(${JSON.stringify(t)}, ${JSON.stringify(orders).replace(/'/g, "&apos;")})'>Generate Bill</button>
+      </div>`;
+    }).join('');
+  });
+}
+function adminBillingRenderReport() {
+  const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
+  db.collection('bills').where('createdAt', '>=', startOfDay).onSnapshot(snap => {
+    if (adminActiveTab !== 'billing' || adminBillingView !== 'report') return;
+    const bills = snap.docs.map(d => d.data());
+    const total = bills.reduce((s, b) => s + b.total, 0);
+    const byMethod = {};
+    bills.forEach(b => byMethod[b.paymentMethod] = (byMethod[b.paymentMethod] || 0) + b.total);
+    const el = document.getElementById('billingContent');
+    if (!el) return;
+    el.innerHTML = `
+      <div class="card">
+        <p class="small">Today's Sales</p>
+        <h2 style="color:var(--gold-soft);margin:4px 0">₹${total}</h2>
+        <p class="small">${bills.length} bills settled</p>
+      </div>
+      ${Object.entries(byMethod).map(([m, amt]) => `
+        <div class="card row"><span>${m}</span><strong>₹${amt}</strong></div>`).join('')}
+    `;
+  });
+}
+function adminBillingRenderHistory() {
+  db.collection('bills').orderBy('createdAt', 'desc').limit(30).get().then(snap => {
+    if (adminActiveTab !== 'billing' || adminBillingView !== 'history') return;
+    const el = document.getElementById('billingContent');
+    if (!el) return;
+    if (snap.empty) { el.innerHTML = '<div class="empty-state">No receipts yet.</div>'; return; }
+    el.innerHTML = snap.docs.map(d => {
+      const b = d.data();
+      return `<div class="card">
+        <div class="row"><strong>Table ${b.table.replace(/^T0*/,'')}</strong><span class="small">${b.paymentMethod}</span></div>
+        <div class="row"><span class="small">₹${b.total}${b.discount ? ' (₹' + b.discount + ' off)' : ''}</span>
+        <button style="width:auto" class="secondary" onclick='cashierReprint(${JSON.stringify(b).replace(/'/g, "&apos;")})'>Reprint</button></div>
+      </div>`;
+    }).join('');
+  });
+}
+
 // ---- MORE menu (Tables, QR, Feedback, Logs, Performance, Broadcast, Settings) ----
 function adminRenderMore() {
   const wrap = document.getElementById('adminContent');
+  const session = getStaffSession();
+  const isCashier = session && session.role === 'cashier';
   if (!adminMoreView) {
     wrap.innerHTML = `<div class="menu-grid">
       <button onclick="adminOpenMore('tables')">🔲 Tables</button>
@@ -1394,7 +1495,7 @@ function adminRenderMore() {
       <button onclick="adminOpenMore('logs')">📜 Activity Log</button>
       <button onclick="adminOpenMore('performance')">📈 Performance</button>
       <button onclick="adminOpenMore('broadcast')">📢 Broadcast</button>
-      <button onclick="adminOpenMore('settings')">⚙️ Settings</button>
+      ${isCashier ? '' : '<button onclick="adminOpenMore(\'settings\')">⚙️ Settings</button>'}
     </div>`;
     return;
   }
@@ -1405,7 +1506,7 @@ function adminRenderMore() {
   else if (adminMoreView === 'logs') adminRenderLogs();
   else if (adminMoreView === 'performance') adminRenderPerformance();
   else if (adminMoreView === 'broadcast') adminRenderBroadcast();
-  else if (adminMoreView === 'settings') adminRenderSettings();
+  else if (adminMoreView === 'settings' && !isCashier) adminRenderSettings();
 }
 function adminOpenMore(view) { adminMoreView = view; adminRenderMore(); }
 
@@ -1558,6 +1659,8 @@ function adminRenderSettings() {
         <input id="settingGST" value="${s.gst || ''}" placeholder="GSTIN">
         <p class="small">GST Rate % (optional)</p>
         <input id="settingGSTRate" type="number" value="${s.gstRate || ''}" placeholder="e.g. 5">
+        <p class="small">Estimated Preparation Time (minutes, shown to customers)</p>
+        <input id="settingPrepMinutes" type="number" value="${s.estimatedPrepMinutes || 15}">
         <button onclick="adminSaveSettings()">Save Settings</button>
       </div>`;
   });
@@ -1566,7 +1669,8 @@ function adminSaveSettings() {
   db.collection('settings').doc('restaurant').set({
     name: document.getElementById('settingName').value.trim(),
     gst: document.getElementById('settingGST').value.trim(),
-    gstRate: parseFloat(document.getElementById('settingGSTRate').value) || 0
+    gstRate: parseFloat(document.getElementById('settingGSTRate').value) || 0,
+    estimatedPrepMinutes: parseInt(document.getElementById('settingPrepMinutes').value) || 15
   }, { merge: true }).then(() => alert('Settings saved'));
 }
 
