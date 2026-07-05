@@ -227,6 +227,11 @@
 <script src="firebase-config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
+function getTableFromURL() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('table');
+}
+
 function showView(name) {
   document.querySelectorAll('.view').forEach(v => v.style.display = 'none');
   document.getElementById('view-' + name).style.display = 'block';
