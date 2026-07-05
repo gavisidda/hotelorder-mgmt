@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cashier Dashboard</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .sheet { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; display: none; }
+  .sheet-inner { position: absolute; bottom: 0; left: 0; right: 0; max-height: 85vh; overflow-y: auto; background: var(--bg-card); border-radius: 20px 20px 0 0; padding: 20px; }
+  .pay-option { display: flex; gap: 10px; margin-bottom: 10px; }
+  .pay-option button { background: var(--bg-card); border: 1px solid var(--border); color: var(--text); }
+  .pay-option button.selected { background: var(--gold); color: #1a1408; border: none; }
+</style>
+</head>
+<body>
+
+<div id="loginScreen" class="container" style="padding-top:60px">
+  <h1 style="text-align:center;color:var(--gold-soft)">💰 Cashier Login</h1>
+  <div class="pin-dots"><span></span><span></span><span></span><span></span></div>
+  <p id="loginError" style="text-align:center;color:var(--red);min-height:18px;font-size:13px"></p>
+  <div class="pin-pad">
+    <button onclick="pinPress('1')">1</button><button onclick="pinPress('2')">2</button><button onclick="pinPress('3')">3</button>
+    <button onclick="pinPress('4')">4</button><button onclick="pinPress('5')">5</button><button onclick="pinPress('6')">6</button>
+    <button onclick="pinPress('7')">7</button><button onclick="pinPress('8')">8</button><button onclick="pinPress('9')">9</button>
+    <button></button><button onclick="pinPress('0')">0</button><button onclick="pinBackspace()">⌫</button>
+  </div>
+</div>
+
+<div id="dashboard" style="display:none">
+  <div class="topbar">
+    <div><h1 id="cashierName">Cashier</h1><div class="sub">Pending bills</div></div>
+    <button class="secondary" style="width:auto" onclick="logout()">Logout</button>
+  </div>
+  <div class="container" id="billsList"><div class="spinner"></div></div>
+  <div class="bottom-nav">
+    <a href="#" class="active" onclick="setTab('pending')"><span class="icon">🧾</span>Pending</a>
+    <a href="#" onclick="setTab('report')"><span class="icon">📊</span>Today</a>
+  </div>
+</div>
+
+<div class="sheet" id="paySheet">
+  <div class="sheet-inner">
+    <h2 style="margin-top:0;color:var(--gold-soft)">Table <span id="payTable"></span></h2>
+    <div id="payItems"></div>
+    <div class="row" style="margin:12px 0"><strong>Total</strong><strong id="payTotal" style="color:var(--gold-soft)"></strong></div>
+    <p class="small">Payment method</p>
+    <div class="pay-option">
+      <button id="payCash" onclick="selectMethod('Cash')">💵 Cash</button>
+      <button id="payUPI" onclick="selectMethod('UPI')">📱 UPI</button>
+      <button id="payCard" onclick="selectMethod('Card')">💳 Card</button>
+    </div>
+    <button onclick="confirmPayment()">Confirm Payment & Print Receipt</button>
+    <button class="secondary" style="margin-top:8px" onclick="closePay()">Cancel</button>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>const REQUIRED_ROLE = 'cashier';</script>
+<script src="auth.js"></script>
+<script>
+let activeTab = 'pending';
+let payingTable = null;
+let payingOrders = [];
+let selectedMethod = null;
+
+function setTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.bottom-nav a').forEach(a => a.classList.remove('active'));
+  event.target.closest('a').classList.add('active');
+  render();
+}
+
+function onLoginSuccess() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+  document.getElementById('cashierName').textContent = currentUser.name || 'Cashier';
+  render();
+}
+
+function render() {
+  if (activeTab === 'pending') renderPending();
+  else renderReport();
+}
+
+function renderPending() {
+  db.collection('orders').where('status', '==', 'served').onSnapshot(snap => {
+    if (activeTab !== 'pending') return;
+    const byTable = {};
+    snap.docs.forEach(d => {
+      const o = { id: d.id, ...d.data() };
+      if (!byTable[o.table]) byTable[o.table] = [];
+      byTable[o.table].push(o);
+    });
+    const wrap = document.getElementById('billsList');
+    const tables = Object.keys(byTable);
+    if (tables.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No bills pending 🎉</div>';
+      return;
+    }
+    wrap.innerHTML = tables.map(t => {
+      const orders = byTable[t];
+      const total = orders.reduce((s, o) => s + o.total, 0);
+      return `<div class="card">
+        <div class="row"><strong>Table ${t.replace(/^T0*/,'')}</strong><span class="badge served">${orders.length} order(s)</span></div>
+        <p class="small">₹${total} total</p>
+        <button onclick='openPay(${JSON.stringify(t)}, ${JSON.stringify(orders).replace(/'/g, "&apos;")})'>Generate Bill</button>
+      </div>`;
+    }).join('');
+  });
+}
+
+function openPay(table, orders) {
+  payingTable = table;
+  payingOrders = orders;
+  selectedMethod = null;
+  document.getElementById('payTable').textContent = table.replace(/^T0*/, '');
+  const allItems = orders.flatMap(o => o.items);
+  document.getElementById('payItems').innerHTML = allItems.map(i =>
+    `<div class="row small"><span>${i.name} × ${i.qty}</span><span>₹${i.price * i.qty}</span></div>`).join('');
+  const total = orders.reduce((s, o) => s + o.total, 0);
+  document.getElementById('payTotal').textContent = '₹' + total;
+  document.querySelectorAll('.pay-option button').forEach(b => b.classList.remove('selected'));
+  document.getElementById('paySheet').style.display = 'block';
+}
+function closePay() { document.getElementById('paySheet').style.display = 'none'; }
+
+function selectMethod(m) {
+  selectedMethod = m;
+  document.querySelectorAll('.pay-option button').forEach(b => b.classList.remove('selected'));
+  document.getElementById('pay' + m.replace('UPI','UPI')).classList.add('selected');
+}
+
+function confirmPayment() {
+  if (!selectedMethod) { alert('Please select a payment method'); return; }
+  const total = payingOrders.reduce((s, o) => s + o.total, 0);
+  const batch = db.batch();
+  payingOrders.forEach(o => {
+    batch.update(db.collection('orders').doc(o.id), { status: 'billed' });
+  });
+  const billRef = db.collection('bills').doc();
+  batch.set(billRef, {
+    table: payingTable,
+    orderIds: payingOrders.map(o => o.id),
+    total,
+    paymentMethod: selectedMethod,
+    paymentStatus: 'paid',
+    cashier: currentUser.name,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  batch.update(db.collection('tables').doc(payingTable), { status: 'available', billRequested: false });
+  batch.commit().then(() => {
+    closePay();
+    window.print();
+  });
+}
+
+function renderReport() {
+  const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
+  db.collection('bills').where('createdAt', '>=', startOfDay).onSnapshot(snap => {
+    if (activeTab !== 'report') return;
+    const bills = snap.docs.map(d => d.data());
+    const total = bills.reduce((s, b) => s + b.total, 0);
+    const byMethod = {};
+    bills.forEach(b => byMethod[b.paymentMethod] = (byMethod[b.paymentMethod] || 0) + b.total);
+    const wrap = document.getElementById('billsList');
+    wrap.innerHTML = `
+      <div class="card">
+        <p class="small">Today's Sales</p>
+        <h2 style="color:var(--gold-soft);margin:4px 0">₹${total}</h2>
+        <p class="small">${bills.length} bills settled</p>
+      </div>
+      ${Object.entries(byMethod).map(([m, amt]) => `
+        <div class="card row"><span>${m}</span><strong>₹${amt}</strong></div>`).join('')}
+    `;
+  });
+}
+
+if (!tryRestoreSession()) {
+  document.getElementById('loginScreen').style.display = 'block';
+}
+</script>
+</body>
+</html>

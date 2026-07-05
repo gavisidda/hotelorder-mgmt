@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Dashboard</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .sheet { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; display: none; }
+  .sheet-inner { position: absolute; bottom: 0; left: 0; right: 0; max-height: 88vh; overflow-y: auto; background: var(--bg-card); border-radius: 20px 20px 0 0; padding: 20px; }
+  .fab { position: fixed; bottom: 90px; right: 18px; width: 54px; height: 54px; border-radius: 50%; font-size: 24px; z-index: 25; box-shadow: 0 6px 16px rgba(0,0,0,0.4); }
+  .qr-box { text-align: center; padding: 14px; }
+  .qr-box img, .qr-box canvas { background: white; padding: 8px; border-radius: 8px; }
+  .stat-row { display: flex; gap: 10px; }
+  .stat-row .card { flex: 1; text-align: center; }
+  .stat-row h2 { margin: 4px 0; color: var(--gold-soft); font-size: 22px; }
+</style>
+</head>
+<body>
+
+<div id="loginScreen" class="container" style="padding-top:60px">
+  <h1 style="text-align:center;color:var(--gold-soft)">🛠️ Admin Login</h1>
+  <div class="pin-dots"><span></span><span></span><span></span><span></span></div>
+  <p id="loginError" style="text-align:center;color:var(--red);min-height:18px;font-size:13px"></p>
+  <div class="pin-pad">
+    <button onclick="pinPress('1')">1</button><button onclick="pinPress('2')">2</button><button onclick="pinPress('3')">3</button>
+    <button onclick="pinPress('4')">4</button><button onclick="pinPress('5')">5</button><button onclick="pinPress('6')">6</button>
+    <button onclick="pinPress('7')">7</button><button onclick="pinPress('8')">8</button><button onclick="pinPress('9')">9</button>
+    <button></button><button onclick="pinPress('0')">0</button><button onclick="pinBackspace()">⌫</button>
+  </div>
+</div>
+
+<div id="dashboard" style="display:none">
+  <div class="topbar">
+    <div><h1 id="adminName">Admin</h1><div class="sub" id="tabLabel">Overview</div></div>
+    <button class="secondary" style="width:auto" onclick="logout()">Logout</button>
+  </div>
+  <div class="container" id="content"><div class="spinner"></div></div>
+  <button class="fab" id="fab" onclick="openAddSheet()" style="display:none">+</button>
+  <div class="bottom-nav">
+    <a href="#" class="active" onclick="setTab('overview')"><span class="icon">📊</span>Overview</a>
+    <a href="#" onclick="setTab('menu')"><span class="icon">🍽️</span>Menu</a>
+    <a href="#" onclick="setTab('users')"><span class="icon">👥</span>Users</a>
+    <a href="#" onclick="setTab('tables')"><span class="icon">🔲</span>QR</a>
+    <a href="#" onclick="setTab('settings')"><span class="icon">⚙️</span>More</a>
+  </div>
+</div>
+
+<!-- Add/Edit Menu Item Sheet -->
+<div class="sheet" id="menuSheet">
+  <div class="sheet-inner">
+    <h2 style="margin-top:0;color:var(--gold-soft)" id="menuSheetTitle">Add Menu Item</h2>
+    <input type="hidden" id="menuItemId">
+    <input id="itemName" placeholder="Item name">
+    <select id="itemCategory"></select>
+    <input id="itemPrice" type="number" placeholder="Price (₹)">
+    <input id="itemImage" placeholder="Image URL (optional)">
+    <textarea id="itemDesc" placeholder="Short description (optional)"></textarea>
+    <label class="row"><span>Available</span><input type="checkbox" id="itemAvailable" style="width:auto" checked></label>
+    <button onclick="saveMenuItem()">Save Item</button>
+    <button class="secondary" style="margin-top:8px" onclick="closeSheet('menuSheet')">Cancel</button>
+  </div>
+</div>
+
+<!-- Add Category Sheet -->
+<div class="sheet" id="catSheet">
+  <div class="sheet-inner">
+    <h2 style="margin-top:0;color:var(--gold-soft)">Add Category</h2>
+    <input id="catName" placeholder="Category name (e.g. Starters)">
+    <button onclick="saveCategory()">Save Category</button>
+    <button class="secondary" style="margin-top:8px" onclick="closeSheet('catSheet')">Cancel</button>
+  </div>
+</div>
+
+<!-- Add User Sheet -->
+<div class="sheet" id="userSheet">
+  <div class="sheet-inner">
+    <h2 style="margin-top:0;color:var(--gold-soft)">Add Staff Member</h2>
+    <input id="userName" placeholder="Full name">
+    <select id="userRole">
+      <option value="admin">Admin</option>
+      <option value="waiter">Waiter</option>
+      <option value="cook">Kitchen / Cook</option>
+      <option value="cashier">Cashier</option>
+    </select>
+    <input id="userPin" placeholder="4-digit PIN" maxlength="4" type="number">
+    <button onclick="saveUser()">Save Staff Member</button>
+    <button class="secondary" style="margin-top:8px" onclick="closeSheet('userSheet')">Cancel</button>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>const REQUIRED_ROLE = 'admin';</script>
+<script src="auth.js"></script>
+<script>
+let activeTab = 'overview';
+let categoriesCache = [];
+
+function setTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.bottom-nav a').forEach(a => a.classList.remove('active'));
+  event.target.closest('a').classList.add('active');
+  document.getElementById('tabLabel').textContent = tab.charAt(0).toUpperCase() + tab.slice(1);
+  document.getElementById('fab').style.display = (tab === 'menu' || tab === 'users') ? 'flex' : 'none';
+  render();
+}
+
+function onLoginSuccess() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+  document.getElementById('adminName').textContent = currentUser.name || 'Admin';
+  render();
+}
+
+function render() {
+  if (activeTab === 'overview') renderOverview();
+  else if (activeTab === 'menu') renderMenuAdmin();
+  else if (activeTab === 'users') renderUsers();
+  else if (activeTab === 'tables') renderQR();
+  else if (activeTab === 'settings') renderSettings();
+}
+
+// ---------- OVERVIEW ----------
+function renderOverview() {
+  const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
+  Promise.all([
+    db.collection('bills').where('createdAt', '>=', startOfDay).get(),
+    db.collection('orders').where('status', 'in', ['new','preparing','ready']).get(),
+    db.collection('tables').where('status', '==', 'occupied').get()
+  ]).then(([bills, activeOrders, occTables]) => {
+    if (activeTab !== 'overview') return;
+    const salesToday = bills.docs.reduce((s, d) => s + d.data().total, 0);
+    document.getElementById('content').innerHTML = `
+      <div class="stat-row">
+        <div class="card"><p class="small">Today's Sales</p><h2>₹${salesToday}</h2></div>
+        <div class="card"><p class="small">Active Orders</p><h2>${activeOrders.size}</h2></div>
+        <div class="card"><p class="small">Occupied Tables</p><h2>${occTables.size}</h2></div>
+      </div>
+      <div class="card">
+        <p class="small">Bills settled today: ${bills.size}</p>
+        <p class="small">Use the Menu, Users, and QR tabs below to manage your restaurant.</p>
+      </div>`;
+  });
+}
+
+// ---------- MENU ----------
+function loadCategoriesCache(cb) {
+  db.collection('categories').orderBy('order').get().then(snap => {
+    categoriesCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (cb) cb();
+  });
+}
+
+function renderMenuAdmin() {
+  loadCategoriesCache(() => {
+    db.collection('menu').onSnapshot(snap => {
+      if (activeTab !== 'menu') return;
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const wrap = document.getElementById('content');
+      wrap.innerHTML = `
+        <button class="secondary" style="margin-bottom:12px" onclick="openCatSheet()">+ Manage Categories (${categoriesCache.length})</button>
+      ` + (items.length === 0 ? '<div class="empty-state">No menu items yet. Tap + to add one.</div>' :
+        items.map(i => {
+          const cat = categoriesCache.find(c => c.id === i.category);
+          return `<div class="card row">
+            <div>
+              <strong>${i.name}</strong> <span class="small">₹${i.price}</span>
+              <p class="small">${cat ? cat.name : 'Uncategorized'} ${i.available ? '' : '· Hidden'}</p>
+            </div>
+            <div style="display:flex;gap:6px">
+              <button style="width:auto" class="secondary" onclick='editMenuItem(${JSON.stringify(i).replace(/'/g, "&apos;")})'>Edit</button>
+              <button style="width:auto" class="danger" onclick="deleteMenuItem('${i.id}')">🗑</button>
+            </div>
+          </div>`;
+        }).join(''));
+    });
+  });
+}
+
+function openAddSheet() {
+  if (activeTab === 'menu') openMenuSheet();
+  else if (activeTab === 'users') openUserSheet();
+}
+
+function openMenuSheet() {
+  document.getElementById('menuSheetTitle').textContent = 'Add Menu Item';
+  document.getElementById('menuItemId').value = '';
+  document.getElementById('itemName').value = '';
+  document.getElementById('itemPrice').value = '';
+  document.getElementById('itemImage').value = '';
+  document.getElementById('itemDesc').value = '';
+  document.getElementById('itemAvailable').checked = true;
+  const sel = document.getElementById('itemCategory');
+  sel.innerHTML = categoriesCache.map(c => `<option value="${c.id}">${c.name}</option>`).join('') || '<option value="">Add a category first</option>';
+  document.getElementById('menuSheet').style.display = 'block';
+}
+
+function editMenuItem(item) {
+  openMenuSheet();
+  document.getElementById('menuSheetTitle').textContent = 'Edit Menu Item';
+  document.getElementById('menuItemId').value = item.id;
+  document.getElementById('itemName').value = item.name;
+  document.getElementById('itemCategory').value = item.category;
+  document.getElementById('itemPrice').value = item.price;
+  document.getElementById('itemImage').value = item.image || '';
+  document.getElementById('itemDesc').value = item.description || '';
+  document.getElementById('itemAvailable').checked = item.available;
+}
+
+function saveMenuItem() {
+  const id = document.getElementById('menuItemId').value;
+  const data = {
+    name: document.getElementById('itemName').value.trim(),
+    category: document.getElementById('itemCategory').value,
+    price: parseFloat(document.getElementById('itemPrice').value) || 0,
+    image: document.getElementById('itemImage').value.trim(),
+    description: document.getElementById('itemDesc').value.trim(),
+    available: document.getElementById('itemAvailable').checked
+  };
+  if (!data.name || !data.category) { alert('Name and category are required'); return; }
+  const ref = id ? db.collection('menu').doc(id) : db.collection('menu').doc();
+  ref.set(data, { merge: true }).then(() => closeSheet('menuSheet'));
+}
+
+function deleteMenuItem(id) {
+  if (confirm('Delete this menu item?')) db.collection('menu').doc(id).delete();
+}
+
+function openCatSheet() {
+  document.getElementById('catName').value = '';
+  document.getElementById('catSheet').style.display = 'block';
+}
+function saveCategory() {
+  const name = document.getElementById('catName').value.trim();
+  if (!name) return;
+  db.collection('categories').add({ name, order: categoriesCache.length }).then(() => {
+    closeSheet('catSheet');
+    loadCategoriesCache(() => renderMenuAdmin());
+  });
+}
+
+// ---------- USERS ----------
+function renderUsers() {
+  db.collection('users').onSnapshot(snap => {
+    if (activeTab !== 'users') return;
+    const users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const wrap = document.getElementById('content');
+    wrap.innerHTML = users.length === 0 ? '<div class="empty-state">No staff yet. Tap + to add one.</div>' :
+      users.map(u => `<div class="card row">
+        <div><strong>${u.name}</strong><p class="small">${u.role} · PIN ${u.pin}</p></div>
+        <div style="display:flex;gap:6px">
+          <button style="width:auto" class="secondary" onclick="toggleUser('${u.id}', ${!u.active})">${u.active ? 'Disable' : 'Enable'}</button>
+          <button style="width:auto" class="danger" onclick="deleteUser('${u.id}')">🗑</button>
+        </div>
+      </div>`).join('');
+  });
+}
+function toggleUser(id, active) { db.collection('users').doc(id).update({ active }); }
+function deleteUser(id) { if (confirm('Remove this staff member?')) db.collection('users').doc(id).delete(); }
+
+function openUserSheet() {
+  document.getElementById('userName').value = '';
+  document.getElementById('userPin').value = '';
+  document.getElementById('userSheet').style.display = 'block';
+}
+function saveUser() {
+  const name = document.getElementById('userName').value.trim();
+  const role = document.getElementById('userRole').value;
+  const pin = document.getElementById('userPin').value.trim();
+  if (!name || pin.length !== 4) { alert('Name and a 4-digit PIN are required'); return; }
+  db.collection('users').add({ name, role, pin, active: true }).then(() => closeSheet('userSheet'));
+}
+
+// ---------- QR / TABLES ----------
+function renderQR() {
+  const wrap = document.getElementById('content');
+  wrap.innerHTML = `
+    <div class="card">
+      <p class="small">Site URL (edit if different)</p>
+      <input id="siteUrl" value="${location.origin}${location.pathname.replace('admin.html','')}">
+      <div class="row">
+        <input id="tableCount" type="number" value="20" style="margin-bottom:0">
+        <button style="width:auto;margin-left:8px" onclick="generateAllQR()">Generate</button>
+      </div>
+    </div>
+    <div id="qrGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"></div>`;
+}
+
+function generateAllQR() {
+  const base = document.getElementById('siteUrl').value.trim();
+  const count = parseInt(document.getElementById('tableCount').value) || 10;
+  const grid = document.getElementById('qrGrid');
+  grid.innerHTML = '';
+  const batch = db.batch();
+  for (let i = 1; i <= count; i++) {
+    const tableId = 'T' + String(i).padStart(2, '0');
+    const url = base + 'index.html?table=' + tableId;
+    const box = document.createElement('div');
+    box.className = 'card qr-box';
+    box.innerHTML = `<strong>Table ${i}</strong><div id="qr-${tableId}"></div><p class="small">${tableId}</p>`;
+    grid.appendChild(box);
+    new QRCode(document.getElementById('qr-' + tableId), { text: url, width: 110, height: 110 });
+    batch.set(db.collection('tables').doc(tableId), { status: 'available' }, { merge: true });
+  }
+  batch.commit();
+}
+
+// ---------- SETTINGS ----------
+function renderSettings() {
+  db.collection('settings').doc('restaurant').get().then(doc => {
+    if (activeTab !== 'settings') return;
+    const s = doc.exists ? doc.data() : {};
+    document.getElementById('content').innerHTML = `
+      <div class="card">
+        <p class="small">Restaurant Name</p>
+        <input id="settingName" value="${s.name || ''}" placeholder="Restaurant name">
+        <p class="small">GST Number (optional)</p>
+        <input id="settingGST" value="${s.gst || ''}" placeholder="GSTIN">
+        <p class="small">GST Rate % (optional)</p>
+        <input id="settingGSTRate" type="number" value="${s.gstRate || ''}" placeholder="e.g. 5">
+        <button onclick="saveSettings()">Save Settings</button>
+      </div>
+      <div class="card">
+        <p class="small">Reports</p>
+        <button class="secondary" onclick="setTab('overview')">View Today's Overview</button>
+      </div>`;
+  });
+}
+function saveSettings() {
+  db.collection('settings').doc('restaurant').set({
+    name: document.getElementById('settingName').value.trim(),
+    gst: document.getElementById('settingGST').value.trim(),
+    gstRate: parseFloat(document.getElementById('settingGSTRate').value) || 0
+  }, { merge: true }).then(() => alert('Settings saved'));
+}
+
+function closeSheet(id) { document.getElementById(id).style.display = 'none'; }
+
+if (!tryRestoreSession()) {
+  document.getElementById('loginScreen').style.display = 'block';
+}
+</script>
+</body>
+</html>

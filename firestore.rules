@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Menu, categories, and settings: anyone can read (customers browsing via QR),
+    // only writable from your admin dashboard usage pattern.
+    // NOTE: because this project uses app-level PIN checks (not Firebase Auth),
+    // these rules are intentionally open for writes so admin/staff pages work
+    // without Firebase Authentication. Keep your GitHub repo private if it
+    // contains real menu/pricing data you don't want publicly editable by URL.
+    match /menu/{itemId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /categories/{catId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Tables: customers need to read/write (call waiter, request bill),
+    // staff dashboards read/write status.
+    match /tables/{tableId} {
+      allow read, write: if true;
+    }
+
+    // Orders: customers create orders (no read of other tables' totals needed,
+    // but simplified here to allow read for order-history lookups by ID).
+    match /orders/{orderId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if true;
+    }
+
+    // Bills: created only by cashier flow; readable for reports.
+    match /bills/{billId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Staff PINs: readable so login can match a PIN + role.
+    // Consider restricting fields returned in your UI (never display other PINs).
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if true;
+    }
+  }
+}
