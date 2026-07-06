@@ -77,6 +77,84 @@ customer sees it struck through with the reason in their "My Orders" screen.
 - **Audit log** — already existed; now also logs item cancellations, menu availability toggles,
   and "serve now" (no-kitchen) actions.
 
+## Billing fix + new payment options (latest update)
+
+**The bug:** `cashierConfirmPayment()` was calling `closeSheet('paySheet')` *before*
+`window.print()` — so the sheet holding all the item details was already hidden when the print
+dialog opened, which is why receipts came out blank. Fixed by introducing a dedicated
+**Receipt Sheet** that's populated and shown *after* payment, with printing as an explicit,
+optional button — not automatic anymore.
+
+- **Print Receipt** — now a button on the receipt sheet (shown after Confirm Payment, or from
+  Receipts → Reprint). Only the receipt content prints (clean black-on-white), not the app UI.
+- **Share via WhatsApp** — also on the receipt sheet. If the customer gave a mobile number when
+  ordering, it opens WhatsApp with that number already filled in; otherwise it opens WhatsApp's
+  contact picker so the cashier can choose who to send it to. Both fully optional — the cashier
+  can just tap "Done" and skip both.
+- **UPI QR code at billing** — a "Show UPI QR to Customer" button in the payment sheet generates
+  a scannable UPI QR (works with GPay, PhonePe, Paytm, any UPI app) pre-filled with the exact
+  amount due. Requires a one-time setup: Admin → More → Settings → enter your UPI ID (e.g.
+  `yourname@okhdfcbank`). This is still a manual-confirm flow — there's no backend to auto-detect
+  the payment, so the cashier waits for the customer to show the "payment successful" screen on
+  their phone, then taps Confirm Payment as usual.
+
+## Kitchen/order flow improvements (latest update)
+
+### Mixed orders — ready-to-serve items no longer wait for the kitchen
+Previously, "no kitchen needed" only worked if *every* item in an order was ready-to-serve
+(tea, coffee, etc). Now it works at the **item level** within a single order:
+- If a customer orders a coffee (ready-to-serve) and a biryani (needs kitchen) together, the
+  order still goes to the kitchen for the biryani — but the waiter sees a **"Serve" button right
+  next to the coffee** and can hand it over immediately, without waiting for the biryani.
+- The Kitchen Display never shows ready-to-serve items at all (even in a mixed order) — kitchen
+  staff only ever see what actually needs preparing.
+- The waiter's Orders tab now also shows orders that are "Kitchen Preparing" *if* they still have
+  an unserved ready-to-serve item waiting — pure kitchen orders with nothing to serve yet stay
+  hidden from that tab until the kitchen marks them ready, same as before.
+- Once the kitchen marks the rest of the order ready and the waiter taps "Mark Served," every
+  remaining item (including any ready-to-serve item that wasn't individually served yet) is marked
+  served automatically, so nothing is missed and the bill only becomes payable once everything has
+  actually gone out.
+
+### Table transfer
+Waiters (Tables tab) and Admin/Cashier (More → Tables) can now **move an occupied table's active
+orders to a different table** — for when customers physically change seats. Pick the source
+(occupied) and destination (available) table and tap Transfer:
+- All active orders for that table are reassigned to the new table number.
+- The old table is freed up (marked available); the new one becomes occupied, keeping the same
+  assigned waiter.
+- Logged in the activity log for traceability.
+- Note: any *new* order the customer places afterward needs them to scan the new table's QR code
+  — this only moves existing orders and table state, not the customer's phone session.
+
+## Table number consistency (latest update)
+
+**The problem:** the app would accept whatever was in a QR link's `?table=` parameter as-is —
+so "5", "t5", "T05", and "Table 5" could all end up creating *different* table documents in
+Firestore for what was really the same physical table, and a mistyped or hand-edited link could
+silently create a stray new "table."
+
+**The fix:**
+- Every table number is now normalized through one function to a canonical form — "5", "t5",
+  "Table 5", and "T05" all resolve to the same `T05` document. This applies everywhere a table ID
+  is read or written: customer QR links, bulk QR generation, single-table QR generation, table
+  transfer, and manual table management.
+- **Admin/Cashier can now pre-define tables** under **More → Tables** — enter a table number and
+  tap Add. This is in addition to (not a replacement for) the bulk QR generator; use whichever is
+  more convenient.
+- **Customers can no longer create a table by visiting a link.** If a QR/link points at a table
+  number that hasn't been added yet, the customer sees "This table hasn't been set up yet — please
+  ask our staff for assistance" instead of silently spinning up a new, unmanaged table.
+- **Waiters' QR tab** now only lists tables that admin/cashier have actually defined — no more
+  fallback to a fake "T01" when nothing exists yet, which previously could generate a QR code for
+  a table that didn't really exist.
+- Tables now sort numerically everywhere (Table 2 before Table 10) instead of alphabetically,
+  which matters once you have more than 9 tables.
+- Fixed a related bug: re-running the bulk QR generator no longer resets an occupied/reserved
+  table back to "available" — it only creates tables that don't exist yet.
+- Admin/Cashier can also delete a table from More → Tables (this only removes the table record
+  itself, it doesn't touch any existing orders).
+
 ## Deliberately not built (and why) — this round
 - **Low-stock / inventory alerts** — needs a stock-tracking data model (consumption per item,
   reorder thresholds) that doesn't exist yet; a real feature worth its own pass.
