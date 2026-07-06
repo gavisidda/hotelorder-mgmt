@@ -64,6 +64,16 @@
   .star.filled { opacity: 1; }
   .mini-x { width: auto !important; padding: 2px 8px !important; font-size: 11px !important; }
   .cancelled-item { text-decoration: line-through; color: var(--text-dim); }
+  #receiptItems .row { padding: 4px 0; }
+  @media print {
+    body * { visibility: hidden; }
+    #receiptPrintArea, #receiptPrintArea * { visibility: visible; }
+    #receiptPrintArea {
+      position: absolute; top: 0; left: 0; width: 100%;
+      color: #000 !important; background: #fff !important; padding: 20px;
+    }
+    #receiptPrintArea h2, #receiptPrintArea strong, #receiptPrintArea span, #receiptPrintArea p { color: #000 !important; }
+  }
 </style>
 </head>
 <body>
@@ -199,8 +209,27 @@
       <button id="payCard" onclick="cashierSelectMethod('Card')">💳 Card</button>
       <button id="payWallet" onclick="cashierSelectMethod('Wallet')">👛 Wallet</button>
     </div>
-    <button id="payConfirmBtn" onclick="cashierConfirmPayment()">Confirm Payment & Print Receipt</button>
+    <button class="secondary" onclick="showUpiQr()">📱 Show UPI QR to Customer</button>
+    <div id="upiQrBox" style="display:none"></div>
+    <button id="payConfirmBtn" style="margin-top:8px" onclick="cashierConfirmPayment()">Confirm Payment</button>
     <button class="secondary" style="margin-top:8px" onclick="closeSheet('paySheet')">Cancel</button>
+  </div>
+</div>
+
+<div class="sheet" id="receiptSheet">
+  <div class="sheet-inner">
+    <div id="receiptPrintArea">
+      <h2 style="text-align:center;margin-top:0" id="receiptRestName">Restaurant</h2>
+      <p class="small" style="text-align:center" id="receiptMeta"></p>
+      <div id="receiptItems"></div>
+      <div class="row" style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
+        <strong>Total</strong><strong id="receiptTotal" style="color:var(--gold-soft)"></strong>
+      </div>
+      <p class="small" style="text-align:center;margin-top:14px">Thank you for visiting!</p>
+    </div>
+    <button onclick="printReceipt()" style="margin-top:14px">🖨️ Print Receipt (optional)</button>
+    <button class="secondary" style="margin-top:8px" onclick="shareReceiptWhatsApp()">📲 Share via WhatsApp (optional)</button>
+    <button class="secondary" style="margin-top:8px" onclick="closeSheet('receiptSheet')">Done</button>
   </div>
 </div>
 
@@ -363,12 +392,25 @@ function cancelOrderItem(orderId, itemIndex) {
   });
 }
 
-function renderItemsList(order, editable) {
+function renderItemsList(order, editable, opts) {
+  opts = opts || {};
   return order.items.map((i, idx) => {
+    if (opts.onlyKitchen && i.readyToServe) return '';
     if (i.cancelled) {
       return `<li class="cancelled-item"><span>${i.qty} × ${i.name} <span class="small">(cancelled: ${i.cancelReason})</span></span></li>`;
     }
-    return `<li><span>${i.qty} × ${i.name}</span>${editable ? `<button class="danger mini-x" onclick="cancelOrderItem('${order.id}',${idx})">✕</button>` : ''}</li>`;
+    const tag = i.readyToServe ? ' <span class="small">(ready-to-serve)</span>' : '';
+    if (i.readyToServe && i.served) {
+      return `<li><span>${i.qty} × ${i.name}${tag} · ✅ served</span></li>`;
+    }
+    let actions = '';
+    if (opts.showServe && i.readyToServe) {
+      actions += `<button class="mini-x" style="background:var(--gold);color:#1a1408" onclick="waiterServeItem('${order.id}',${idx})">Serve</button>`;
+    }
+    if (editable) {
+      actions += `<button class="danger mini-x" onclick="cancelOrderItem('${order.id}',${idx})">✕</button>`;
+    }
+    return `<li><span>${i.qty} × ${i.name}${tag}</span><span style="display:flex;gap:4px">${actions}</span></li>`;
   }).join('');
 }
 
@@ -715,7 +757,7 @@ function custCloseCart() { document.getElementById('cartSheet').style.display = 
 function custPlaceOrder() {
   const entries = Object.entries(custCart);
   if (entries.length === 0) return;
-  const items = entries.map(([id, c]) => ({ itemId: id, name: c.name, price: c.price, qty: c.qty, readyToServe: !!c.readyToServe }));
+  const items = entries.map(([id, c]) => ({ itemId: id, name: c.name, price: c.price, qty: c.qty, readyToServe: !!c.readyToServe, served: false }));
   const total = items.reduce((s, i) => s + i.price * i.qty, 0);
   const notes = document.getElementById('specialInstructions').value.trim();
   const mobile = document.getElementById('custMobileInput').value.trim();
@@ -844,33 +886,49 @@ function waiterRender() {
 }
 
 function waiterRenderOrders() {
-  db.collection('orders').where('status', 'in', ['new', 'ready']).onSnapshot(snap => {
+  db.collection('orders').where('status', 'in', ['new', 'preparing', 'ready']).onSnapshot(snap => {
     if (waiterActiveTab !== 'orders') return;
-    const orders = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+    let orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // Hide pure-kitchen orders that are still preparing (nothing for the waiter to do yet);
+    // keep mixed orders visible so the ready-to-serve items can still be delivered.
+    orders = orders.filter(o => o.status !== 'preparing' || o.items.some(i => i.readyToServe && !i.served && !i.cancelled));
+    orders = orders.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
     const wrap = document.getElementById('waiterContent');
     if (orders.length === 0) {
       wrap.innerHTML = '<div class="empty-state">No new or ready orders right now 🎉</div>';
       return;
     }
+    const statusLabel = { new: 'New Order', preparing: 'Kitchen Preparing', ready: 'Ready to Serve' };
     wrap.innerHTML = orders.map(o => `
       <div class="card">
         <div class="row">
           <strong>Table ${o.table.replace(/^T0*/,'')}</strong>
-          <span class="badge ${o.status}">${o.status === 'new' ? 'New Order' : 'Ready to Serve'}</span>
+          <span class="badge ${o.status}">${statusLabel[o.status] || o.status}</span>
         </div>
-        ${o.noKitchen ? '<span class="badge available">No Kitchen — ready-to-serve items</span>' : ''}
-        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true)}</ul>
+        ${o.noKitchen ? '<span class="badge available">No Kitchen — ready-to-serve items</span>' :
+          (o.items.some(i => i.readyToServe) ? '<span class="badge available">Mixed order</span>' : '')}
+        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { showServe: true })}</ul>
         ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
         ${o.customerMobile ? `<p class="small">📱 ${o.customerMobile}</p>` : ''}
         <div class="row"><span class="small">₹${o.total}</span></div>
         <div class="row" style="gap:6px">
           ${o.status === 'new'
             ? (o.noKitchen ? `<button onclick="waiterServeNow('${o.id}')">Serve Now</button>` : `<button onclick="waiterAcceptOrder('${o.id}')">Accept Order</button>`)
-            : `<button onclick="waiterMarkServed('${o.id}')">Mark Served</button>`}
+            : (o.status === 'ready' ? `<button onclick="waiterMarkServed('${o.id}')">Mark Served</button>` : '<p class="small">👨‍🍳 Kitchen is preparing the rest of this order</p>')}
           ${o.status === 'new' ? `<button style="width:auto" class="danger" onclick="waiterCancelOrder('${o.id}')">Cancel</button>` : ''}
         </div>
       </div>`).join('');
+  });
+}
+
+function waiterServeItem(orderId, itemIndex) {
+  db.collection('orders').doc(orderId).get().then(doc => {
+    if (!doc.exists) return;
+    const o = doc.data();
+    o.items[itemIndex].served = true;
+    db.collection('orders').doc(orderId).update({ items: o.items }).then(() => {
+      logActivity('serve_item', o.table + ' - ' + o.items[itemIndex].name);
+    });
   });
 }
 
@@ -885,16 +943,24 @@ function waiterAcceptOrder(id) {
 }
 function waiterServeNow(id) {
   const session = getStaffSession();
-  db.collection('orders').doc(id).update({
-    status: 'served',
-    acceptedBy: (session && session.name) || '',
-    servedAt: firebase.firestore.FieldValue.serverTimestamp()
+  db.collection('orders').doc(id).get().then(doc => {
+    if (!doc.exists) return;
+    const items = doc.data().items.map(i => i.cancelled ? i : { ...i, served: true });
+    db.collection('orders').doc(id).update({
+      status: 'served', items,
+      acceptedBy: (session && session.name) || '',
+      servedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    logActivity('serve_direct_no_kitchen', id);
   });
-  logActivity('serve_direct_no_kitchen', id);
 }
 function waiterMarkServed(id) {
-  db.collection('orders').doc(id).update({ status: 'served', servedAt: firebase.firestore.FieldValue.serverTimestamp() });
-  logActivity('mark_served', id);
+  db.collection('orders').doc(id).get().then(doc => {
+    if (!doc.exists) return;
+    const items = doc.data().items.map(i => i.cancelled ? i : { ...i, served: true });
+    db.collection('orders').doc(id).update({ status: 'served', items, servedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    logActivity('mark_served', id);
+  });
 }
 function waiterCancelOrder(id) {
   if (!confirm('Cancel this entire order?')) return;
@@ -902,18 +968,57 @@ function waiterCancelOrder(id) {
   logActivity('cancel_order', id);
 }
 
+// ---- Table transfer (move an occupied table's active orders to another table) ----
+function transferTable(fromTable, toTable) {
+  if (!fromTable || !toTable || fromTable === toTable) { alert('Choose two different tables'); return; }
+  db.collection('orders').where('table', '==', fromTable).where('status', 'in', ['new', 'preparing', 'ready', 'served']).get().then(snap => {
+    const batch = db.batch();
+    snap.docs.forEach(d => batch.update(d.ref, { table: toTable }));
+    db.collection('tables').doc(fromTable).get().then(fromDoc => {
+      const fromData = fromDoc.exists ? fromDoc.data() : {};
+      batch.set(db.collection('tables').doc(toTable), {
+        status: 'occupied',
+        assignedWaiter: fromData.assignedWaiter || null,
+        lastOrderId: fromData.lastOrderId || null,
+        waiterCall: false, billRequested: false
+      }, { merge: true });
+      batch.set(db.collection('tables').doc(fromTable), {
+        status: 'available', assignedWaiter: null, waiterCall: false, billRequested: false
+      }, { merge: true });
+      batch.commit().then(() => {
+        logActivity('transfer_table', fromTable + ' -> ' + toTable + ' (' + snap.size + ' order(s))');
+        toast('Moved ' + snap.size + ' order(s) from Table ' + fromTable.replace(/^T0*/,'') + ' to Table ' + toTable.replace(/^T0*/,''));
+      });
+    });
+  });
+}
+function doTransferTable() {
+  const from = document.getElementById('transferFrom').value;
+  const to = document.getElementById('transferTo').value;
+  if (!from || !to) { alert('Select both a source and destination table'); return; }
+  if (!confirm('Move all active orders from Table ' + from.replace(/^T0*/,'') + ' to Table ' + to.replace(/^T0*/,'') + '? The customer will need to scan the new table QR code for any further orders.')) return;
+  transferTable(from, to);
+}
+
 function waiterRenderTables() {
   db.collection('tables').orderBy(firebase.firestore.FieldPath.documentId()).onSnapshot(snap => {
     if (waiterActiveTab !== 'tables') return;
     const wrap = document.getElementById('waiterContent');
     if (snap.empty) { wrap.innerHTML = '<div class="empty-state">No tables set up yet. Ask admin to generate QR codes.</div>'; return; }
-    wrap.innerHTML = snap.docs.map(d => {
-      const t = d.data();
-      return `<div class="card row">
-        <span><strong>Table ${d.id.replace(/^T0*/,'')}</strong> ${t.assignedWaiter ? '· ' + t.assignedWaiter : ''}</span>
+    const tables = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const occupied = tables.filter(t => t.status === 'occupied');
+    const available = tables.filter(t => t.status === 'available');
+    wrap.innerHTML = `
+      <div class="card">
+        <p class="small">Transfer a table (move active orders to another table)</p>
+        <select id="transferFrom">${occupied.map(t => `<option value="${t.id}">Table ${t.id.replace(/^T0*/,'')}</option>`).join('') || '<option value="">No occupied tables</option>'}</select>
+        <select id="transferTo">${available.map(t => `<option value="${t.id}">Table ${t.id.replace(/^T0*/,'')}</option>`).join('') || '<option value="">No available tables</option>'}</select>
+        <button onclick="doTransferTable()">Transfer</button>
+      </div>
+    ` + tables.map(t => `<div class="card row">
+        <span><strong>Table ${t.id.replace(/^T0*/,'')}</strong> ${t.assignedWaiter ? '· ' + t.assignedWaiter : ''}</span>
         <span class="badge ${t.status || 'available'}">${t.status || 'available'}</span>
-      </div>`;
-    }).join('');
+      </div>`).join('');
   });
 }
 
@@ -979,7 +1084,7 @@ function kitchenListenOrders() {
       <div class="card kcard ${o.status}" data-created="${o.createdAt?.seconds || ''}">
         <h2>Table ${o.table.replace(/^T0*/,'')}</h2>
         <span class="badge ${o.status}">${o.status === 'new' ? 'New' : 'Preparing'}</span>
-        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true)}</ul>
+        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { onlyKitchen: true })}</ul>
         ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
         <p class="timer">${kitchenTimeAgo(o.createdAt)}</p>
         ${o.status === 'new'
@@ -1019,6 +1124,8 @@ function kitchenMarkReady(id) {
 let cashierPayingTable = null;
 let cashierPayingOrders = [];
 let cashierSelectedMethod = null;
+let currentReceiptText = '';
+let currentReceiptMobile = null;
 
 function cashierOpenPay(table, orders) {
   cashierPayingTable = table;
@@ -1026,7 +1133,8 @@ function cashierOpenPay(table, orders) {
   cashierSelectedMethod = null;
   document.getElementById('payTable').textContent = table.replace(/^T0*/, '');
   document.getElementById('payDiscount').value = 0;
-  document.getElementById('payConfirmBtn').style.display = 'block';
+  document.getElementById('upiQrBox').style.display = 'none';
+  document.getElementById('upiQrBox').innerHTML = '';
   const allItems = orders.flatMap(o => o.items.filter(i => !i.cancelled));
   document.getElementById('payItems').innerHTML = allItems.map(i =>
     `<div class="row small"><span>${i.name} × ${i.qty}</span><span>₹${i.price * i.qty}</span></div>`).join('');
@@ -1042,6 +1150,22 @@ function cashierSelectMethod(m) {
   document.getElementById('pay' + m).classList.add('selected');
 }
 
+function showUpiQr() {
+  const box = document.getElementById('upiQrBox');
+  if (!mgmtSettings.upiId) {
+    alert('No UPI ID has been set up yet. Ask an admin to add one under More → Settings.');
+    return;
+  }
+  const discount = parseFloat(document.getElementById('payDiscount').value) || 0;
+  const subtotal = cashierPayingOrders.reduce((s, o) => s + o.total, 0);
+  const amount = Math.max(0, subtotal - discount);
+  const payeeName = mgmtSettings.upiPayeeName || mgmtSettings.name || 'Restaurant';
+  const upiUrl = `upi://pay?pa=${encodeURIComponent(mgmtSettings.upiId)}&pn=${encodeURIComponent(payeeName)}&am=${amount}&cu=INR&tn=${encodeURIComponent('Table ' + cashierPayingTable.replace(/^T0*/,''))}`;
+  box.style.display = 'block';
+  box.innerHTML = '<div class="qr-box"><p class="small">Scan with any UPI app (GPay, PhonePe, Paytm, etc.)</p><div id="upiQrCanvas" style="display:flex;justify-content:center;margin-top:8px"></div></div>';
+  new QRCode(document.getElementById('upiQrCanvas'), { text: upiUrl, width: 180, height: 180 });
+}
+
 function cashierConfirmPayment() {
   if (!cashierSelectedMethod) { alert('Please select a payment method'); return; }
   const session = getStaffSession();
@@ -1049,6 +1173,7 @@ function cashierConfirmPayment() {
   const subtotal = cashierPayingOrders.reduce((s, o) => s + o.total, 0);
   const total = Math.max(0, subtotal - discount);
   const allItems = cashierPayingOrders.flatMap(o => o.items.filter(i => !i.cancelled));
+  const mobile = cashierPayingOrders.map(o => o.customerMobile).find(m => m) || null;
   const batch = db.batch();
   cashierPayingOrders.forEach(o => {
     batch.update(db.collection('orders').doc(o.id), { status: 'billed' });
@@ -1068,19 +1193,50 @@ function cashierConfirmPayment() {
   batch.commit().then(() => {
     logActivity('confirm_payment', cashierPayingTable + ' ₹' + total);
     closeSheet('paySheet');
-    window.print();
+    showReceipt({
+      table: cashierPayingTable, items: allItems, subtotal, discount, total,
+      paymentMethod: cashierSelectedMethod, customerMobile: mobile
+    });
   });
 }
 
 function cashierReprint(bill) {
-  document.getElementById('payTable').textContent = bill.table.replace(/^T0*/,'');
-  document.getElementById('payItems').innerHTML = (bill.items || []).map(i =>
-    `<div class="row small"><span>${i.name} × ${i.qty}</span><span>₹${i.price * i.qty}</span></div>`).join('');
-  document.getElementById('payDiscount').value = bill.discount || 0;
-  document.getElementById('payTotal').textContent = '₹' + bill.total;
-  document.getElementById('payConfirmBtn').style.display = 'none';
-  document.getElementById('paySheet').style.display = 'block';
-  setTimeout(() => window.print(), 300);
+  showReceipt(bill);
+}
+
+// ---- Receipt: shown after payment (or reprint), print + WhatsApp share both optional ----
+function showReceipt(bill) {
+  const restName = mgmtSettings.name || 'Restaurant';
+  document.getElementById('receiptRestName').textContent = restName;
+  document.getElementById('receiptMeta').textContent = 'Table ' + bill.table.replace(/^T0*/,'') + ' · ' + new Date().toLocaleString();
+  const items = (bill.items || []).filter(i => !i.cancelled);
+  document.getElementById('receiptItems').innerHTML = items.map(i =>
+    `<div class="row small"><span>${i.name} × ${i.qty}</span><span>₹${i.price * i.qty}</span></div>`).join('') +
+    (bill.discount ? `<div class="row small"><span>Discount</span><span>−₹${bill.discount}</span></div>` : '');
+  document.getElementById('receiptTotal').textContent = '₹' + bill.total + ' (' + bill.paymentMethod + ')';
+
+  const lines = [];
+  lines.push(restName + ' — Receipt');
+  lines.push('Table ' + bill.table.replace(/^T0*/,''));
+  lines.push('');
+  items.forEach(i => lines.push(i.qty + ' x ' + i.name + ' - ₹' + (i.price * i.qty)));
+  if (bill.discount) lines.push('Discount: -₹' + bill.discount);
+  lines.push('Total: ₹' + bill.total + ' (' + bill.paymentMethod + ')');
+  lines.push('Thank you for visiting!');
+  currentReceiptText = lines.join('\n');
+  currentReceiptMobile = bill.customerMobile || null;
+
+  document.getElementById('receiptSheet').style.display = 'block';
+}
+
+function printReceipt() { window.print(); }
+
+function shareReceiptWhatsApp() {
+  const text = encodeURIComponent(currentReceiptText);
+  const url = currentReceiptMobile
+    ? `https://wa.me/91${currentReceiptMobile}?text=${text}`
+    : `https://wa.me/?text=${text}`;
+  window.open(url, '_blank');
 }
 
 // ============================================================
@@ -1091,11 +1247,20 @@ let adminCategoriesCache = [];
 let adminMoreView = null;
 let adminOrderFilter = 'active';
 let adminBillingView = 'pending';
+let mgmtSettings = {};
+
+function loadMgmtSettings(cb) {
+  db.collection('settings').doc('restaurant').get().then(doc => {
+    mgmtSettings = doc.exists ? doc.data() : {};
+    if (cb) cb();
+  });
+}
 
 function adminInit() {
   const session = getStaffSession();
   const roleLabel = (session && session.role === 'cashier') ? 'Cashier' : 'Admin';
   document.getElementById('adminName').textContent = (session && session.name) || roleLabel;
+  loadMgmtSettings();
   adminRender();
 }
 
@@ -1516,22 +1681,30 @@ function adminRenderTables() {
     const waiters = wSnap.docs.map(d => d.data().name);
     const el = document.getElementById('moreContent');
     if (!el) return;
-    el.innerHTML = tSnap.docs.map(d => {
-      const t = d.data();
+    const tables = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const occupied = tables.filter(t => t.status === 'occupied');
+    const available = tables.filter(t => t.status === 'available');
+    const transferCard = `<div class="card">
+      <p class="small">Transfer a table (move active orders to another table)</p>
+      <select id="transferFrom">${occupied.map(t => `<option value="${t.id}">Table ${t.id.replace(/^T0*/,'')}</option>`).join('') || '<option value="">No occupied tables</option>'}</select>
+      <select id="transferTo">${available.map(t => `<option value="${t.id}">Table ${t.id.replace(/^T0*/,'')}</option>`).join('') || '<option value="">No available tables</option>'}</select>
+      <button onclick="doTransferTable()">Transfer</button>
+    </div>`;
+    el.innerHTML = transferCard + (tables.map(t => {
       return `<div class="card">
-        <div class="row"><strong>Table ${d.id.replace(/^T0*/,'')}</strong></div>
+        <div class="row"><strong>Table ${t.id.replace(/^T0*/,'')}</strong></div>
         <div class="row" style="gap:6px;margin-top:6px">
-          <select id="tstatus-${d.id}" style="margin-bottom:0">
+          <select id="tstatus-${t.id}" style="margin-bottom:0">
             ${['available','occupied','reserved','cleaning'].map(s => `<option value="${s}" ${t.status===s?'selected':''}>${s}</option>`).join('')}
           </select>
-          <select id="twaiter-${d.id}" style="margin-bottom:0">
+          <select id="twaiter-${t.id}" style="margin-bottom:0">
             <option value="">No waiter</option>
             ${waiters.map(w => `<option value="${w}" ${t.assignedWaiter===w?'selected':''}>${w}</option>`).join('')}
           </select>
         </div>
-        <button style="margin-top:8px" onclick="adminSaveTable('${d.id}')">Save</button>
+        <button style="margin-top:8px" onclick="adminSaveTable('${t.id}')">Save</button>
       </div>`;
-    }).join('') || '<div class="empty-state">No tables yet. Use Bulk QR Codes to create them.</div>';
+    }).join('') || '<div class="empty-state">No tables yet. Use Bulk QR Codes to create them.</div>');
   });
 }
 function adminSaveTable(id) {
@@ -1661,6 +1834,10 @@ function adminRenderSettings() {
         <input id="settingGSTRate" type="number" value="${s.gstRate || ''}" placeholder="e.g. 5">
         <p class="small">Estimated Preparation Time (minutes, shown to customers)</p>
         <input id="settingPrepMinutes" type="number" value="${s.estimatedPrepMinutes || 15}">
+        <p class="small">UPI ID (for the "Show UPI QR" button at billing, e.g. yourname@okhdfcbank)</p>
+        <input id="settingUpiId" value="${s.upiId || ''}" placeholder="yourname@bank">
+        <p class="small">UPI Payee Name shown to customer (optional — defaults to restaurant name)</p>
+        <input id="settingUpiPayeeName" value="${s.upiPayeeName || ''}" placeholder="Payee name">
         <button onclick="adminSaveSettings()">Save Settings</button>
       </div>`;
   });
@@ -1670,8 +1847,13 @@ function adminSaveSettings() {
     name: document.getElementById('settingName').value.trim(),
     gst: document.getElementById('settingGST').value.trim(),
     gstRate: parseFloat(document.getElementById('settingGSTRate').value) || 0,
-    estimatedPrepMinutes: parseInt(document.getElementById('settingPrepMinutes').value) || 15
-  }, { merge: true }).then(() => alert('Settings saved'));
+    estimatedPrepMinutes: parseInt(document.getElementById('settingPrepMinutes').value) || 15,
+    upiId: document.getElementById('settingUpiId').value.trim(),
+    upiPayeeName: document.getElementById('settingUpiPayeeName').value.trim()
+  }, { merge: true }).then(() => {
+    loadMgmtSettings();
+    alert('Settings saved');
+  });
 }
 
 appInit();
