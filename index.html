@@ -313,6 +313,17 @@ function getTableFromURL() {
   return params.get('table');
 }
 
+// Turns any of "5", "t5", "T05", "table 5", "Table5" into the canonical "T05" form,
+// so the same physical table is never tracked under two different document IDs.
+function normalizeTableId(raw) {
+  if (!raw) return null;
+  const digits = String(raw).replace(/\D/g, '');
+  if (!digits) return null;
+  const num = parseInt(digits, 10);
+  if (!num || num < 1) return null;
+  return 'T' + String(num).padStart(2, '0');
+}
+
 function showView(name) {
   document.querySelectorAll('.view').forEach(v => v.style.display = 'none');
   document.getElementById('view-' + name).style.display = 'block';
@@ -619,18 +630,38 @@ let custCart = {};
 let custEstimatedPrepMinutes = 15;
 
 function custInit(table) {
-  custTableId = table;
-  custCart = JSON.parse(sessionStorage.getItem('cart_' + custTableId) || '{}');
-  document.getElementById('tableLabel').textContent = 'Table ' + custTableId.replace(/^T0*/, '');
-  const savedMobile = localStorage.getItem('custMobile') || '';
-  document.getElementById('custMobileInput').value = savedMobile;
-  custLoadSettings();
-  custLoadCategories();
-  custLoadMenu();
-  custRenderCartBar();
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+  const normalized = normalizeTableId(table);
+  if (!normalized) {
+    custShowTableError('Invalid Table Link', 'This QR code or link isn\u2019t valid. Please ask our staff for help.');
+    return;
   }
+  db.collection('tables').doc(normalized).get().then(doc => {
+    if (!doc.exists) {
+      custShowTableError('Table Not Set Up', 'This table hasn\u2019t been set up yet. Please ask our staff for assistance.');
+      return;
+    }
+    custTableId = normalized;
+    custCart = JSON.parse(sessionStorage.getItem('cart_' + custTableId) || '{}');
+    document.getElementById('tableLabel').textContent = 'Table ' + custTableId.replace(/^T0*/, '');
+    const savedMobile = localStorage.getItem('custMobile') || '';
+    document.getElementById('custMobileInput').value = savedMobile;
+    custLoadSettings();
+    custLoadCategories();
+    custLoadMenu();
+    custRenderCartBar();
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  }).catch(() => {
+    custShowTableError('Connection Problem', 'Could not check this table right now. Please check your connection and try again.');
+  });
+}
+
+function custShowTableError(title, message) {
+  document.getElementById('view-customer').innerHTML =
+    '<div class="container" style="padding-top:80px;text-align:center">' +
+    '<h1 style="color:var(--gold-soft)">⚠️ ' + title + '</h1>' +
+    '<p class="small">' + message + '</p></div>';
 }
 
 function custSaveCart() {
@@ -1001,11 +1032,12 @@ function doTransferTable() {
 }
 
 function waiterRenderTables() {
-  db.collection('tables').orderBy(firebase.firestore.FieldPath.documentId()).onSnapshot(snap => {
+  db.collection('tables').onSnapshot(snap => {
     if (waiterActiveTab !== 'tables') return;
     const wrap = document.getElementById('waiterContent');
-    if (snap.empty) { wrap.innerHTML = '<div class="empty-state">No tables set up yet. Ask admin to generate QR codes.</div>'; return; }
-    const tables = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (snap.empty) { wrap.innerHTML = '<div class="empty-state">No tables set up yet. Ask admin/cashier to add tables under More → Tables.</div>'; return; }
+    let tables = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    tables = tables.sort((a, b) => (parseInt(a.id.replace(/\D/g,'')) || 0) - (parseInt(b.id.replace(/\D/g,'')) || 0));
     const occupied = tables.filter(t => t.status === 'occupied');
     const available = tables.filter(t => t.status === 'available');
     wrap.innerHTML = `
@@ -1039,12 +1071,19 @@ function waiterClearCall(tableId) {
 }
 
 function waiterRenderQR() {
-  db.collection('tables').orderBy(firebase.firestore.FieldPath.documentId()).get().then(snap => {
-    const options = snap.docs.map(d => `<option value="${d.id}">Table ${d.id.replace(/^T0*/,'')}</option>`).join('');
+  db.collection('tables').get().then(snap => {
+    if (snap.empty) {
+      document.getElementById('waiterContent').innerHTML =
+        '<div class="empty-state">No tables set up yet. Ask admin/cashier to add tables under More → Tables before generating QR codes.</div>';
+      return;
+    }
+    let tables = snap.docs.map(d => d.id);
+    tables = tables.sort((a, b) => (parseInt(a.replace(/\D/g,'')) || 0) - (parseInt(b.replace(/\D/g,'')) || 0));
+    const options = tables.map(id => `<option value="${id}">Table ${id.replace(/^T0*/,'')}</option>`).join('');
     document.getElementById('waiterContent').innerHTML = `
       <div class="card">
         <p class="small">Select a table to generate its QR code</p>
-        <select id="waiterQrTable">${options || '<option value="T01">T01</option>'}</select>
+        <select id="waiterQrTable">${options}</select>
         <button onclick="waiterGenerateQR()">Generate QR</button>
       </div>
       <div id="waiterQrResult"></div>`;
@@ -1681,18 +1720,28 @@ function adminRenderTables() {
     const waiters = wSnap.docs.map(d => d.data().name);
     const el = document.getElementById('moreContent');
     if (!el) return;
-    const tables = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    let tables = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    tables = tables.sort((a, b) => (parseInt(a.id.replace(/\D/g,'')) || 0) - (parseInt(b.id.replace(/\D/g,'')) || 0));
     const occupied = tables.filter(t => t.status === 'occupied');
     const available = tables.filter(t => t.status === 'available');
+    const addCard = `<div class="card">
+      <p class="small">Add a new table</p>
+      <div class="row" style="gap:8px">
+        <input id="newTableNumber" type="number" min="1" placeholder="Table number (e.g. 5)" style="margin-bottom:0">
+        <button style="width:auto" onclick="adminAddTable()">Add</button>
+      </div>
+    </div>`;
     const transferCard = `<div class="card">
       <p class="small">Transfer a table (move active orders to another table)</p>
       <select id="transferFrom">${occupied.map(t => `<option value="${t.id}">Table ${t.id.replace(/^T0*/,'')}</option>`).join('') || '<option value="">No occupied tables</option>'}</select>
       <select id="transferTo">${available.map(t => `<option value="${t.id}">Table ${t.id.replace(/^T0*/,'')}</option>`).join('') || '<option value="">No available tables</option>'}</select>
       <button onclick="doTransferTable()">Transfer</button>
     </div>`;
-    el.innerHTML = transferCard + (tables.map(t => {
+    el.innerHTML = addCard + transferCard + (tables.map(t => {
       return `<div class="card">
-        <div class="row"><strong>Table ${t.id.replace(/^T0*/,'')}</strong></div>
+        <div class="row"><strong>Table ${t.id.replace(/^T0*/,'')}</strong>
+          <button style="width:auto" class="danger" onclick="adminDeleteTable('${t.id}')">🗑</button>
+        </div>
         <div class="row" style="gap:6px;margin-top:6px">
           <select id="tstatus-${t.id}" style="margin-bottom:0">
             ${['available','occupied','reserved','cleaning'].map(s => `<option value="${s}" ${t.status===s?'selected':''}>${s}</option>`).join('')}
@@ -1704,7 +1753,30 @@ function adminRenderTables() {
         </div>
         <button style="margin-top:8px" onclick="adminSaveTable('${t.id}')">Save</button>
       </div>`;
-    }).join('') || '<div class="empty-state">No tables yet. Use Bulk QR Codes to create them.</div>');
+    }).join('') || '<div class="empty-state">No tables yet — add one above.</div>');
+  });
+}
+function adminAddTable() {
+  const raw = document.getElementById('newTableNumber').value.trim();
+  const tableId = normalizeTableId(raw);
+  if (!tableId) { alert('Enter a valid table number'); return; }
+  db.collection('tables').doc(tableId).get().then(doc => {
+    if (doc.exists) { alert('Table ' + tableId.replace(/^T0*/,'') + ' already exists.'); return; }
+    db.collection('tables').doc(tableId).set({
+      status: 'available',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).then(() => {
+      logActivity('add_table', tableId);
+      toast('Table ' + tableId.replace(/^T0*/,'') + ' added');
+      adminRenderTables();
+    });
+  });
+}
+function adminDeleteTable(id) {
+  if (!confirm('Delete Table ' + id.replace(/^T0*/,'') + '? This does not affect any existing orders.')) return;
+  db.collection('tables').doc(id).delete().then(() => {
+    logActivity('delete_table', id);
+    adminRenderTables();
   });
 }
 function adminSaveTable(id) {
@@ -1731,18 +1803,25 @@ function adminGenerateAllQR() {
   const count = parseInt(document.getElementById('tableCount').value) || 10;
   const grid = document.getElementById('qrGrid');
   grid.innerHTML = '';
-  const batch = db.batch();
-  for (let i = 1; i <= count; i++) {
-    const tableId = 'T' + String(i).padStart(2, '0');
-    const url = base + 'index.html?table=' + tableId;
-    const box = document.createElement('div');
-    box.className = 'card qr-box';
-    box.innerHTML = `<strong>Table ${i}</strong><div id="qr-${tableId}"></div><p class="small">${tableId}</p>`;
-    grid.appendChild(box);
-    new QRCode(document.getElementById('qr-' + tableId), { text: url, width: 110, height: 110 });
-    batch.set(db.collection('tables').doc(tableId), { status: 'available' }, { merge: true });
-  }
-  batch.commit();
+  db.collection('tables').get().then(existingSnap => {
+    const existingIds = new Set(existingSnap.docs.map(d => d.id));
+    const batch = db.batch();
+    for (let i = 1; i <= count; i++) {
+      const tableId = 'T' + String(i).padStart(2, '0');
+      const url = base + 'index.html?table=' + tableId;
+      const box = document.createElement('div');
+      box.className = 'card qr-box';
+      box.innerHTML = `<strong>Table ${i}</strong><div id="qr-${tableId}"></div><p class="small">${tableId}</p>`;
+      grid.appendChild(box);
+      new QRCode(document.getElementById('qr-' + tableId), { text: url, width: 110, height: 110 });
+      // Only create tables that don't exist yet — re-running this must never
+      // reset an already-occupied/reserved table back to "available".
+      if (!existingIds.has(tableId)) {
+        batch.set(db.collection('tables').doc(tableId), { status: 'available' });
+      }
+    }
+    batch.commit();
+  });
 }
 
 function adminRenderFeedback() {
