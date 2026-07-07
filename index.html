@@ -650,6 +650,20 @@ function custInit(table) {
       custShowTableError('Table Not Set Up', 'This table hasn\u2019t been set up yet. Please ask our staff for assistance.');
       return Promise.reject('handled');
     }
+    const tableData = doc.data();
+    const myHistory = JSON.parse(localStorage.getItem('orderHistory_' + normalized) || '[]');
+    if (tableData.status === 'reserved') {
+      custShowTableError('Table Reserved', 'This table is currently reserved. Please check with our staff for seating.');
+      return Promise.reject('handled');
+    }
+    if (tableData.status === 'cleaning') {
+      custShowTableError('Table Being Prepared', 'This table is currently being cleaned. Please wait a moment or ask our staff for assistance.');
+      return Promise.reject('handled');
+    }
+    if (tableData.status === 'occupied' && myHistory.length === 0) {
+      custShowTableError('Table Occupied', 'This table is currently occupied by another customer. Please ask our staff for assistance or check your table number.');
+      return Promise.reject('handled');
+    }
     custTableId = normalized;
     custCart = JSON.parse(sessionStorage.getItem('cart_' + custTableId) || '{}');
     document.getElementById('tableLabel').textContent = 'Table ' + custTableId.replace(/^T0*/, '');
@@ -1100,6 +1114,27 @@ function waiterRenderTables() {
     tables = tables.sort((a, b) => (parseInt(a.id.replace(/\D/g,'')) || 0) - (parseInt(b.id.replace(/\D/g,'')) || 0));
     const occupied = tables.filter(t => t.status === 'occupied');
     const available = tables.filter(t => t.status === 'available');
+    const groups = [
+      ['occupied', 'Occupied'], ['available', 'Available'],
+      ['reserved', 'Reserved'], ['cleaning', 'Cleaning']
+    ];
+    const groupedHtml = groups.map(([status, label]) => {
+      const group = tables.filter(t => (t.status || 'available') === status);
+      if (group.length === 0) return '';
+      return `<p class="small" style="margin:14px 0 4px;font-weight:600">${label} (${group.length})</p>` +
+        group.map(t => `<div class="card">
+          <div class="row">
+            <span><strong>Table ${t.id.replace(/^T0*/,'')}</strong> ${t.assignedWaiter ? '· ' + t.assignedWaiter : ''}</span>
+            <span class="badge ${t.status || 'available'}">${t.status || 'available'}</span>
+          </div>
+          <div class="row" style="gap:6px;margin-top:6px">
+            <select id="wtstatus-${t.id}" style="margin-bottom:0">
+              ${['available','occupied','reserved','cleaning'].map(s => `<option value="${s}" ${(t.status||'available')===s?'selected':''}>${s}</option>`).join('')}
+            </select>
+            <button style="width:auto" onclick="waiterSetTableStatus('${t.id}')">Save</button>
+          </div>
+        </div>`).join('');
+    }).join('');
     wrap.innerHTML = `
       <div class="card">
         <p class="small">Transfer a table (move active orders to another table)</p>
@@ -1107,10 +1142,14 @@ function waiterRenderTables() {
         <select id="transferTo">${available.map(t => `<option value="${t.id}">Table ${t.id.replace(/^T0*/,'')}</option>`).join('') || '<option value="">No available tables</option>'}</select>
         <button onclick="doTransferTable()">Transfer</button>
       </div>
-    ` + tables.map(t => `<div class="card row">
-        <span><strong>Table ${t.id.replace(/^T0*/,'')}</strong> ${t.assignedWaiter ? '· ' + t.assignedWaiter : ''}</span>
-        <span class="badge ${t.status || 'available'}">${t.status || 'available'}</span>
-      </div>`).join('');
+    ` + groupedHtml;
+  });
+}
+function waiterSetTableStatus(id) {
+  const status = document.getElementById('wtstatus-' + id).value;
+  db.collection('tables').doc(id).update({ status }).then(() => {
+    logActivity('set_table_status', id + ' -> ' + status);
+    toast('Table ' + id.replace(/^T0*/,'') + ' set to ' + status);
   });
 }
 
@@ -1137,12 +1176,17 @@ function waiterRenderQR() {
         '<div class="empty-state">No tables set up yet. Ask admin/cashier to add tables under More → Tables before generating QR codes.</div>';
       return;
     }
-    let tables = snap.docs.map(d => d.id);
-    tables = tables.sort((a, b) => (parseInt(a.replace(/\D/g,'')) || 0) - (parseInt(b.replace(/\D/g,'')) || 0));
-    const options = tables.map(id => `<option value="${id}">Table ${id.replace(/^T0*/,'')}</option>`).join('');
+    let tables = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(t => t.status !== 'reserved');
+    tables = tables.sort((a, b) => (parseInt(a.id.replace(/\D/g,'')) || 0) - (parseInt(b.id.replace(/\D/g,'')) || 0));
+    if (tables.length === 0) {
+      document.getElementById('waiterContent').innerHTML =
+        '<div class="empty-state">All tables are currently reserved. Ask admin/cashier to change a table\u2019s status under More → Tables.</div>';
+      return;
+    }
+    const options = tables.map(t => `<option value="${t.id}">Table ${t.id.replace(/^T0*/,'')}</option>`).join('');
     document.getElementById('waiterContent').innerHTML = `
       <div class="card">
-        <p class="small">Select a table to generate its QR code</p>
+        <p class="small">Select a table to generate its QR code (reserved tables are hidden)</p>
         <select id="waiterQrTable">${options}</select>
         <button onclick="waiterGenerateQR()">Generate QR</button>
       </div>
@@ -1793,6 +1837,8 @@ function adminRenderTables() {
     tables = tables.sort((a, b) => (parseInt(a.id.replace(/\D/g,'')) || 0) - (parseInt(b.id.replace(/\D/g,'')) || 0));
     const occupied = tables.filter(t => t.status === 'occupied');
     const available = tables.filter(t => t.status === 'available');
+    const reserved = tables.filter(t => t.status === 'reserved');
+    const cleaning = tables.filter(t => t.status === 'cleaning');
     const addCard = `<div class="card">
       <p class="small">Add a new table</p>
       <div class="row" style="gap:8px">
@@ -1800,29 +1846,42 @@ function adminRenderTables() {
         <button style="width:auto" onclick="adminAddTable()">Add</button>
       </div>
     </div>`;
+    const summaryCard = `<div class="stat-row">
+      <div class="card"><p class="small">Occupied</p><h2>${occupied.length}</h2></div>
+      <div class="card"><p class="small">Available</p><h2>${available.length}</h2></div>
+      <div class="card"><p class="small">Reserved</p><h2>${reserved.length}</h2></div>
+      <div class="card"><p class="small">Cleaning</p><h2>${cleaning.length}</h2></div>
+    </div>`;
     const transferCard = `<div class="card">
       <p class="small">Transfer a table (move active orders to another table)</p>
       <select id="transferFrom">${occupied.map(t => `<option value="${t.id}">Table ${t.id.replace(/^T0*/,'')}</option>`).join('') || '<option value="">No occupied tables</option>'}</select>
       <select id="transferTo">${available.map(t => `<option value="${t.id}">Table ${t.id.replace(/^T0*/,'')}</option>`).join('') || '<option value="">No available tables</option>'}</select>
       <button onclick="doTransferTable()">Transfer</button>
     </div>`;
-    el.innerHTML = addCard + transferCard + (tables.map(t => {
-      return `<div class="card">
-        <div class="row"><strong>Table ${t.id.replace(/^T0*/,'')}</strong>
-          <button style="width:auto" class="danger" onclick="adminDeleteTable('${t.id}')">🗑</button>
-        </div>
-        <div class="row" style="gap:6px;margin-top:6px">
-          <select id="tstatus-${t.id}" style="margin-bottom:0">
-            ${['available','occupied','reserved','cleaning'].map(s => `<option value="${s}" ${t.status===s?'selected':''}>${s}</option>`).join('')}
-          </select>
-          <select id="twaiter-${t.id}" style="margin-bottom:0">
-            <option value="">No waiter</option>
-            ${waiters.map(w => `<option value="${w}" ${t.assignedWaiter===w?'selected':''}>${w}</option>`).join('')}
-          </select>
-        </div>
-        <button style="margin-top:8px" onclick="adminSaveTable('${t.id}')">Save</button>
-      </div>`;
-    }).join('') || '<div class="empty-state">No tables yet — add one above.</div>');
+    const groups = [
+      ['occupied', 'Occupied', occupied], ['available', 'Available', available],
+      ['reserved', 'Reserved', reserved], ['cleaning', 'Cleaning', cleaning]
+    ];
+    const groupedHtml = groups.map(([status, label, group]) => {
+      if (group.length === 0) return '';
+      return `<p class="small" style="margin:14px 0 4px;font-weight:600">${label} (${group.length})</p>` +
+        group.map(t => `<div class="card">
+          <div class="row"><strong>Table ${t.id.replace(/^T0*/,'')}</strong>
+            <button style="width:auto" class="danger" onclick="adminDeleteTable('${t.id}')">🗑</button>
+          </div>
+          <div class="row" style="gap:6px;margin-top:6px">
+            <select id="tstatus-${t.id}" style="margin-bottom:0">
+              ${['available','occupied','reserved','cleaning'].map(s => `<option value="${s}" ${t.status===s?'selected':''}>${s}</option>`).join('')}
+            </select>
+            <select id="twaiter-${t.id}" style="margin-bottom:0">
+              <option value="">No waiter</option>
+              ${waiters.map(w => `<option value="${w}" ${t.assignedWaiter===w?'selected':''}>${w}</option>`).join('')}
+            </select>
+          </div>
+          <button style="margin-top:8px" onclick="adminSaveTable('${t.id}')">Save</button>
+        </div>`).join('');
+    }).join('');
+    el.innerHTML = addCard + summaryCard + transferCard + (groupedHtml || '<div class="empty-state">No tables yet — add one above.</div>');
   });
 }
 function adminAddTable() {
