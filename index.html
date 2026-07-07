@@ -180,10 +180,10 @@
   </div>
   <div class="container" id="waiterContent"><div class="spinner"></div></div>
   <div class="bottom-nav">
-    <a href="#" class="active" onclick="waiterSetTab('orders')"><span class="icon">🔔</span>Orders</a>
-    <a href="#" onclick="waiterSetTab('tables')"><span class="icon">🍽️</span>Tables</a>
-    <a href="#" onclick="waiterSetTab('calls')"><span class="icon">📣</span>Calls</a>
-    <a href="#" onclick="waiterSetTab('qr')"><span class="icon">🔲</span>QR</a>
+    <a href="#" class="active" data-tab="orders" onclick="waiterSetTab('orders')"><span class="icon">🔔</span>Orders</a>
+    <a href="#" data-tab="tables" onclick="waiterSetTab('tables')"><span class="icon">🍽️</span>Tables</a>
+    <a href="#" data-tab="calls" onclick="waiterSetTab('calls')"><span class="icon">📣</span>Calls</a>
+    <a href="#" data-tab="qr" onclick="waiterSetTab('qr')"><span class="icon">🔲</span>QR</a>
   </div>
 </div>
 
@@ -241,12 +241,12 @@
   <div class="container" id="adminContent"><div class="spinner"></div></div>
   <button class="fab" id="adminFab" onclick="adminOpenAddSheet()" style="display:none">+</button>
   <div class="bottom-nav">
-    <a href="#" class="active" onclick="adminSetTab('overview')"><span class="icon">📊</span>Overview</a>
-    <a href="#" onclick="adminSetTab('orders')"><span class="icon">🧾</span>Orders</a>
-    <a href="#" onclick="adminSetTab('menu')"><span class="icon">🍽️</span>Menu</a>
-    <a href="#" onclick="adminSetTab('staff')"><span class="icon">👥</span>Staff</a>
-    <a href="#" onclick="adminSetTab('billing')"><span class="icon">💳</span>Billing</a>
-    <a href="#" onclick="adminSetTab('more')"><span class="icon">⚙️</span>More</a>
+    <a href="#" class="active" data-tab="overview" onclick="adminSetTab('overview')"><span class="icon">📊</span>Overview</a>
+    <a href="#" data-tab="orders" onclick="adminSetTab('orders')"><span class="icon">🧾</span>Orders</a>
+    <a href="#" data-tab="menu" onclick="adminSetTab('menu')"><span class="icon">🍽️</span>Menu</a>
+    <a href="#" data-tab="staff" onclick="adminSetTab('staff')"><span class="icon">👥</span>Staff</a>
+    <a href="#" data-tab="billing" onclick="adminSetTab('billing')"><span class="icon">💳</span>Billing</a>
+    <a href="#" data-tab="more" onclick="adminSetTab('more')"><span class="icon">⚙️</span>More</a>
   </div>
 </div>
 
@@ -346,7 +346,7 @@ function routeToRole(role) {
   else if (role === 'kitchen') { showView('kitchen'); kitchenInit(); }
   else { showView('pending'); }
   startBroadcastListener();
-  startIdleTimer();
+  startSessionValidityCheck();
 }
 
 function appInit() {
@@ -425,21 +425,30 @@ function renderItemsList(order, editable, opts) {
   }).join('');
 }
 
-// ---- Idle session timeout (20 min) ----
-let lastActivityTime = Date.now();
-let idleTimerStarted = false;
-function startIdleTimer() {
-  if (idleTimerStarted) return;
-  idleTimerStarted = true;
-  ['click', 'keydown', 'touchstart'].forEach(evt => {
-    document.addEventListener(evt, () => { lastActivityTime = Date.now(); });
-  });
+// ---- Session stays active until logout. We still periodically check that the account
+// hasn't been disabled/removed by an admin in the meantime, so access can be revoked promptly
+// without forcing everyone to re-login just because they were idle for a while. ----
+let sessionCheckStarted = false;
+function startSessionValidityCheck() {
+  if (sessionCheckStarted) return;
+  sessionCheckStarted = true;
   setInterval(() => {
-    if (getStaffSession() && Date.now() - lastActivityTime > 20 * 60 * 1000) {
-      alert('You have been logged out due to inactivity.');
-      doLogout();
-    }
-  }, 60000);
+    const session = getStaffSession();
+    if (!session) return;
+    db.collection('users').doc(session.id).get().then(doc => {
+      if (!doc.exists || !doc.data().active) {
+        alert('Your access has been removed or disabled. Please contact your admin.');
+        doLogout();
+      }
+    }).catch(() => {});
+  }, 5 * 60 * 1000);
+}
+
+// ---- Restore which tab/sub-view a staff member was on before a page refresh ----
+function setActiveNav(viewId, tab) {
+  document.querySelectorAll('#' + viewId + ' .bottom-nav a').forEach(a => {
+    a.classList.toggle('active', a.dataset.tab === tab);
+  });
 }
 
 // ---- Broadcast banner (admin -> all staff) ----
@@ -628,6 +637,7 @@ let custCategories = [];
 let custActiveCategory = 'all';
 let custCart = {};
 let custEstimatedPrepMinutes = 15;
+let custMobileMandatory = false;
 
 function custInit(table) {
   const normalized = normalizeTableId(table);
@@ -638,23 +648,35 @@ function custInit(table) {
   db.collection('tables').doc(normalized).get().then(doc => {
     if (!doc.exists) {
       custShowTableError('Table Not Set Up', 'This table hasn\u2019t been set up yet. Please ask our staff for assistance.');
-      return;
+      return Promise.reject('handled');
     }
     custTableId = normalized;
     custCart = JSON.parse(sessionStorage.getItem('cart_' + custTableId) || '{}');
     document.getElementById('tableLabel').textContent = 'Table ' + custTableId.replace(/^T0*/, '');
+    return custLoadSettings();
+  }).then(() => {
     const savedMobile = localStorage.getItem('custMobile') || '';
     document.getElementById('custMobileInput').value = savedMobile;
-    custLoadSettings();
-    custLoadCategories();
-    custLoadMenu();
-    custRenderCartBar();
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+    document.getElementById('custMobileInput').placeholder = custMobileMandatory ? 'Your mobile number (required)' : 'Your mobile number (optional)';
+    if (custMobileMandatory && !savedMobile) {
+      custShowMobileGate();
+    } else {
+      custStartOrdering();
     }
-  }).catch(() => {
-    custShowTableError('Connection Problem', 'Could not check this table right now. Please check your connection and try again.');
+  }).catch(err => {
+    if (err !== 'handled') {
+      custShowTableError('Connection Problem', 'Could not check this table right now. Please check your connection and try again.');
+    }
   });
+}
+
+function custStartOrdering() {
+  custLoadCategories();
+  custLoadMenu();
+  custRenderCartBar();
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
 }
 
 function custShowTableError(title, message) {
@@ -662,6 +684,26 @@ function custShowTableError(title, message) {
     '<div class="container" style="padding-top:80px;text-align:center">' +
     '<h1 style="color:var(--gold-soft)">⚠️ ' + title + '</h1>' +
     '<p class="small">' + message + '</p></div>';
+}
+
+function custShowMobileGate() {
+  document.getElementById('view-customer').innerHTML = `
+    <div class="container" style="padding-top:70px;text-align:center">
+      <h1 style="color:var(--gold-soft)">📱 Enter Your Mobile Number</h1>
+      <p class="small">This restaurant requires a mobile number before ordering, for order tracking.</p>
+      <input id="mobileGateInput" type="tel" inputmode="numeric" maxlength="10" placeholder="10-digit mobile number" style="max-width:280px;margin:14px auto">
+      <p id="mobileGateError" style="color:var(--red);font-size:13px;min-height:18px"></p>
+      <button style="max-width:280px;margin:0 auto" onclick="custSubmitMobileGate()">Continue</button>
+    </div>`;
+}
+function custSubmitMobileGate() {
+  const mobile = document.getElementById('mobileGateInput').value.trim();
+  if (!/^\d{10}$/.test(mobile)) {
+    document.getElementById('mobileGateError').textContent = 'Enter a valid 10-digit mobile number';
+    return;
+  }
+  localStorage.setItem('custMobile', mobile);
+  location.reload();
 }
 
 function custSaveCart() {
@@ -681,12 +723,13 @@ function custRenderCartBar() {
 }
 
 function custLoadSettings() {
-  db.collection('settings').doc('restaurant').get().then(doc => {
+  return db.collection('settings').doc('restaurant').get().then(doc => {
     if (doc.exists) {
       const s = doc.data();
       document.getElementById('restaurantName').textContent = s.name || 'Restaurant';
       document.title = (s.name || 'Restaurant') + ' | Menu';
       custEstimatedPrepMinutes = s.estimatedPrepMinutes || 15;
+      custMobileMandatory = !!s.requireCustomerMobile;
     }
   });
 }
@@ -785,6 +828,15 @@ function custOpenCart() {
 }
 function custCloseCart() { document.getElementById('cartSheet').style.display = 'none'; }
 
+function generateOrderNumber() {
+  const d = new Date();
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return dd + mm + '-' + hh + mi;
+}
+
 function custPlaceOrder() {
   const entries = Object.entries(custCart);
   if (entries.length === 0) return;
@@ -793,11 +845,17 @@ function custPlaceOrder() {
   const notes = document.getElementById('specialInstructions').value.trim();
   const mobile = document.getElementById('custMobileInput').value.trim();
   const noKitchen = items.every(i => i.readyToServe);
-  if (mobile && !/^\d{10}$/.test(mobile)) { toast('Mobile number should be 10 digits, or leave it blank'); return; }
+  if (custMobileMandatory) {
+    if (!/^\d{10}$/.test(mobile)) { toast('A valid 10-digit mobile number is required to place an order'); return; }
+  } else if (mobile && !/^\d{10}$/.test(mobile)) {
+    toast('Mobile number should be 10 digits, or leave it blank');
+    return;
+  }
   if (mobile) localStorage.setItem('custMobile', mobile);
 
   db.collection('orders').add({
     table: custTableId,
+    orderNumber: generateOrderNumber(),
     items,
     notes,
     customerMobile: mobile || null,
@@ -837,6 +895,7 @@ function custShowOrderHistory() {
         const canRate = (o.status === 'billed') && !localStorage.getItem('rated_' + d.id);
         const showEta = !o.noKitchen && ['new', 'preparing'].includes(o.status);
         return `<div class="card">
+          <p class="small">Order #${o.orderNumber || '—'}</p>
           <ul style="padding-left:0;list-style:none">${renderItemsList({ id: d.id, items: o.items }, false)}</ul>
           <div class="row"><span class="small">₹${o.total}</span><span class="badge ${o.status}">${o.status}</span></div>
           ${showEta ? `<p class="small">⏱ Estimated ready in ~${custEstimatedPrepMinutes} mins</p>` : ''}
@@ -891,11 +950,12 @@ function custRequestBill() {
 // ============================================================
 // WAITER VIEW
 // ============================================================
-let waiterActiveTab = 'orders';
+let waiterActiveTab = sessionStorage.getItem('waiterActiveTab') || 'orders';
 
 function waiterInit() {
   const session = getStaffSession();
   document.getElementById('waiterName').textContent = (session && session.name) || 'Waiter';
+  setActiveNav('view-waiter', waiterActiveTab);
   waiterListenCalls();
   waiterListenReady();
   waiterRender();
@@ -903,9 +963,8 @@ function waiterInit() {
 
 function waiterSetTab(tab) {
   waiterActiveTab = tab;
-  const nav = document.getElementById('view-waiter').querySelectorAll('.bottom-nav a');
-  nav.forEach(a => a.classList.remove('active'));
-  event.target.closest('a').classList.add('active');
+  sessionStorage.setItem('waiterActiveTab', tab);
+  setActiveNav('view-waiter', tab);
   waiterRender();
 }
 
@@ -936,6 +995,7 @@ function waiterRenderOrders() {
           <strong>Table ${o.table.replace(/^T0*/,'')}</strong>
           <span class="badge ${o.status}">${statusLabel[o.status] || o.status}</span>
         </div>
+        <p class="small">Order #${o.orderNumber || '—'}</p>
         ${o.noKitchen ? '<span class="badge available">No Kitchen — ready-to-serve items</span>' :
           (o.items.some(i => i.readyToServe) ? '<span class="badge available">Mixed order</span>' : '')}
         <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { showServe: true })}</ul>
@@ -1122,6 +1182,7 @@ function kitchenListenOrders() {
     board.innerHTML = orders.map(o => `
       <div class="card kcard ${o.status}" data-created="${o.createdAt?.seconds || ''}">
         <h2>Table ${o.table.replace(/^T0*/,'')}</h2>
+        <p class="small">Order #${o.orderNumber || '—'}</p>
         <span class="badge ${o.status}">${o.status === 'new' ? 'New' : 'Preparing'}</span>
         <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { onlyKitchen: true })}</ul>
         ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
@@ -1213,6 +1274,7 @@ function cashierConfirmPayment() {
   const total = Math.max(0, subtotal - discount);
   const allItems = cashierPayingOrders.flatMap(o => o.items.filter(i => !i.cancelled));
   const mobile = cashierPayingOrders.map(o => o.customerMobile).find(m => m) || null;
+  const orderNumbers = cashierPayingOrders.map(o => o.orderNumber).filter(Boolean);
   const batch = db.batch();
   cashierPayingOrders.forEach(o => {
     batch.update(db.collection('orders').doc(o.id), { status: 'billed' });
@@ -1221,6 +1283,7 @@ function cashierConfirmPayment() {
   batch.set(billRef, {
     table: cashierPayingTable,
     orderIds: cashierPayingOrders.map(o => o.id),
+    orderNumbers,
     items: allItems,
     subtotal, discount, total,
     paymentMethod: cashierSelectedMethod,
@@ -1234,7 +1297,7 @@ function cashierConfirmPayment() {
     closeSheet('paySheet');
     showReceipt({
       table: cashierPayingTable, items: allItems, subtotal, discount, total,
-      paymentMethod: cashierSelectedMethod, customerMobile: mobile
+      paymentMethod: cashierSelectedMethod, customerMobile: mobile, orderNumbers
     });
   });
 }
@@ -1246,8 +1309,9 @@ function cashierReprint(bill) {
 // ---- Receipt: shown after payment (or reprint), print + WhatsApp share both optional ----
 function showReceipt(bill) {
   const restName = mgmtSettings.name || 'Restaurant';
+  const orderNumsText = (bill.orderNumbers && bill.orderNumbers.length) ? bill.orderNumbers.join(', ') : '—';
   document.getElementById('receiptRestName').textContent = restName;
-  document.getElementById('receiptMeta').textContent = 'Table ' + bill.table.replace(/^T0*/,'') + ' · ' + new Date().toLocaleString();
+  document.getElementById('receiptMeta').textContent = 'Table ' + bill.table.replace(/^T0*/,'') + ' · Order(s): ' + orderNumsText + ' · ' + new Date().toLocaleString();
   const items = (bill.items || []).filter(i => !i.cancelled);
   document.getElementById('receiptItems').innerHTML = items.map(i =>
     `<div class="row small"><span>${i.name} × ${i.qty}</span><span>₹${i.price * i.qty}</span></div>`).join('') +
@@ -1256,7 +1320,7 @@ function showReceipt(bill) {
 
   const lines = [];
   lines.push(restName + ' — Receipt');
-  lines.push('Table ' + bill.table.replace(/^T0*/,''));
+  lines.push('Table ' + bill.table.replace(/^T0*/,'') + ' · Order(s): ' + orderNumsText);
   lines.push('');
   items.forEach(i => lines.push(i.qty + ' x ' + i.name + ' - ₹' + (i.price * i.qty)));
   if (bill.discount) lines.push('Discount: -₹' + bill.discount);
@@ -1281,11 +1345,11 @@ function shareReceiptWhatsApp() {
 // ============================================================
 // ADMIN / MANAGER VIEW (admin + cashier share this dashboard)
 // ============================================================
-let adminActiveTab = 'overview';
+let adminActiveTab = sessionStorage.getItem('adminActiveTab') || 'overview';
 let adminCategoriesCache = [];
-let adminMoreView = null;
-let adminOrderFilter = 'active';
-let adminBillingView = 'pending';
+let adminMoreView = sessionStorage.getItem('adminMoreView') || null;
+let adminOrderFilter = sessionStorage.getItem('adminOrderFilter') || 'active';
+let adminBillingView = sessionStorage.getItem('adminBillingView') || 'pending';
 let mgmtSettings = {};
 
 function loadMgmtSettings(cb) {
@@ -1299,6 +1363,9 @@ function adminInit() {
   const session = getStaffSession();
   const roleLabel = (session && session.role === 'cashier') ? 'Cashier' : 'Admin';
   document.getElementById('adminName').textContent = (session && session.name) || roleLabel;
+  setActiveNav('view-admin', adminActiveTab);
+  document.getElementById('adminTabLabel').textContent = adminActiveTab.charAt(0).toUpperCase() + adminActiveTab.slice(1);
+  document.getElementById('adminFab').style.display = (adminActiveTab === 'menu' || adminActiveTab === 'staff') ? 'flex' : 'none';
   loadMgmtSettings();
   adminRender();
 }
@@ -1306,9 +1373,9 @@ function adminInit() {
 function adminSetTab(tab) {
   adminActiveTab = tab;
   adminMoreView = null;
-  const nav = document.getElementById('view-admin').querySelectorAll('.bottom-nav a');
-  nav.forEach(a => a.classList.remove('active'));
-  event.target.closest('a').classList.add('active');
+  sessionStorage.setItem('adminActiveTab', tab);
+  sessionStorage.removeItem('adminMoreView');
+  setActiveNav('view-admin', tab);
   document.getElementById('adminTabLabel').textContent = tab.charAt(0).toUpperCase() + tab.slice(1);
   document.getElementById('adminFab').style.display = (tab === 'menu' || tab === 'staff') ? 'flex' : 'none';
   adminRender();
@@ -1381,6 +1448,7 @@ function adminRenderOrders() {
     list.innerHTML = orders.map(o => `
       <div class="card">
         <div class="row"><strong>Table ${o.table.replace(/^T0*/,'')}</strong><span class="badge ${o.status}">${o.status}</span></div>
+        <p class="small">Order #${o.orderNumber || '—'}</p>
         ${o.noKitchen ? '<span class="badge available">No Kitchen</span>' : ''}
         <ul style="padding-left:0;list-style:none">${renderItemsList(o, false)}</ul>
         <div class="row small">
@@ -1390,7 +1458,7 @@ function adminRenderOrders() {
       </div>`).join('');
   });
 }
-function adminFilterOrders(f) { adminOrderFilter = f; adminRenderOrders(); }
+function adminFilterOrders(f) { adminOrderFilter = f; sessionStorage.setItem('adminOrderFilter', f); adminRenderOrders(); }
 
 function adminLoadCategoriesCache(cb) {
   db.collection('categories').orderBy('order').get().then(snap => {
@@ -1622,7 +1690,7 @@ function adminRenderBilling() {
   else if (adminBillingView === 'report') adminBillingRenderReport();
   else adminBillingRenderHistory();
 }
-function adminSetBillingView(v) { adminBillingView = v; adminRenderBilling(); }
+function adminSetBillingView(v) { adminBillingView = v; sessionStorage.setItem('adminBillingView', v); adminRenderBilling(); }
 
 function adminBillingRenderPending() {
   db.collection('orders').where('status', '==', 'served').onSnapshot(snap => {
@@ -1642,6 +1710,7 @@ function adminBillingRenderPending() {
       const total = orders.reduce((s, o) => s + o.total, 0);
       return `<div class="card">
         <div class="row"><strong>Table ${t.replace(/^T0*/,'')}</strong><span class="badge served">${orders.length} order(s)</span></div>
+        <p class="small">Order(s): ${orders.map(o => o.orderNumber || '—').join(', ')}</p>
         <p class="small">₹${total} total</p>
         <button onclick='cashierOpenPay(${JSON.stringify(t)}, ${JSON.stringify(orders).replace(/'/g, "&apos;")})'>Generate Bill</button>
       </div>`;
@@ -1712,7 +1781,7 @@ function adminRenderMore() {
   else if (adminMoreView === 'broadcast') adminRenderBroadcast();
   else if (adminMoreView === 'settings' && !isCashier) adminRenderSettings();
 }
-function adminOpenMore(view) { adminMoreView = view; adminRenderMore(); }
+function adminOpenMore(view) { adminMoreView = view; sessionStorage.setItem('adminMoreView', view || ''); adminRenderMore(); }
 
 function adminRenderTables() {
   Promise.all([db.collection('tables').get(), db.collection('users').where('role','==','waiter').get()]).then(([tSnap, wSnap]) => {
@@ -1917,6 +1986,7 @@ function adminRenderSettings() {
         <input id="settingUpiId" value="${s.upiId || ''}" placeholder="yourname@bank">
         <p class="small">UPI Payee Name shown to customer (optional — defaults to restaurant name)</p>
         <input id="settingUpiPayeeName" value="${s.upiPayeeName || ''}" placeholder="Payee name">
+        <label class="row"><span>Require customer mobile number before ordering</span><input type="checkbox" id="settingMobileMandatory" style="width:auto" ${s.requireCustomerMobile ? 'checked' : ''}></label>
         <button onclick="adminSaveSettings()">Save Settings</button>
       </div>`;
   });
@@ -1928,7 +1998,8 @@ function adminSaveSettings() {
     gstRate: parseFloat(document.getElementById('settingGSTRate').value) || 0,
     estimatedPrepMinutes: parseInt(document.getElementById('settingPrepMinutes').value) || 15,
     upiId: document.getElementById('settingUpiId').value.trim(),
-    upiPayeeName: document.getElementById('settingUpiPayeeName').value.trim()
+    upiPayeeName: document.getElementById('settingUpiPayeeName').value.trim(),
+    requireCustomerMobile: document.getElementById('settingMobileMandatory').checked
   }, { merge: true }).then(() => {
     loadMgmtSettings();
     alert('Settings saved');
