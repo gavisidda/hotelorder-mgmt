@@ -651,7 +651,6 @@ function custInit(table) {
       return Promise.reject('handled');
     }
     const tableData = doc.data();
-    const myHistory = JSON.parse(localStorage.getItem('orderHistory_' + normalized) || '[]');
     if (tableData.status === 'reserved') {
       custShowTableError('Table Reserved', 'This table is currently reserved. Please check with our staff for seating.');
       return Promise.reject('handled');
@@ -660,13 +659,11 @@ function custInit(table) {
       custShowTableError('Table Being Prepared', 'This table is currently being cleaned. Please wait a moment or ask our staff for assistance.');
       return Promise.reject('handled');
     }
-    if (tableData.status === 'occupied' && myHistory.length === 0) {
-      custShowTableError('Table Occupied', 'This table is currently occupied by another customer. Please ask our staff for assistance or check your table number.');
-      return Promise.reject('handled');
-    }
     custTableId = normalized;
-    custCart = JSON.parse(sessionStorage.getItem('cart_' + custTableId) || '{}');
     document.getElementById('tableLabel').textContent = 'Table ' + custTableId.replace(/^T0*/, '');
+    return custCleanupSessionIfNeeded(custTableId);
+  }).then(() => {
+    custCart = JSON.parse(sessionStorage.getItem('cart_' + custTableId) || '{}');
     return custLoadSettings();
   }).then(() => {
     const savedMobile = localStorage.getItem('custMobile') || '';
@@ -682,6 +679,29 @@ function custInit(table) {
       custShowTableError('Connection Problem', 'Could not check this table right now. Please check your connection and try again.');
     }
   });
+}
+
+// A customer's "session" at a table (their order history for it, remembered on this device)
+// is cleared once every one of their orders there is billed/cancelled, or after 2 hours —
+// whichever comes first. This keeps "My Orders" from showing a stale, finished visit, and
+// gives each new visit to the same table (even on the same phone) a clean slate.
+function custCleanupSessionIfNeeded(tableId) {
+  const historyIds = JSON.parse(localStorage.getItem('orderHistory_' + tableId) || '[]');
+  if (historyIds.length === 0) return Promise.resolve();
+  const sessionStart = parseInt(localStorage.getItem('sessionStart_' + tableId) || '0', 10);
+  if (sessionStart && (Date.now() - sessionStart > 2 * 60 * 60 * 1000)) {
+    custClearLocalSession(tableId);
+    return Promise.resolve();
+  }
+  return Promise.all(historyIds.map(id => db.collection('orders').doc(id).get())).then(docs => {
+    const allDone = docs.every(d => !d.exists || ['billed', 'cancelled'].includes(d.data().status));
+    if (allDone) custClearLocalSession(tableId);
+  }).catch(() => {});
+}
+function custClearLocalSession(tableId) {
+  localStorage.removeItem('orderHistory_' + tableId);
+  localStorage.removeItem('sessionStart_' + tableId);
+  sessionStorage.removeItem('cart_' + tableId);
 }
 
 function custStartOrdering() {
@@ -885,6 +905,9 @@ function custPlaceOrder() {
     }, { merge: true });
 
     let history = JSON.parse(localStorage.getItem('orderHistory_' + custTableId) || '[]');
+    if (history.length === 0) {
+      localStorage.setItem('sessionStart_' + custTableId, String(Date.now()));
+    }
     history.push(ref.id);
     localStorage.setItem('orderHistory_' + custTableId, JSON.stringify(history));
 
