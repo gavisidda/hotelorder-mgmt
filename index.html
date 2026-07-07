@@ -31,6 +31,8 @@
   .board { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; padding: 16px; }
   .kcard { border-top: 4px solid var(--blue); }
   .kcard.preparing { border-top-color: var(--amber); }
+  .kcard.overdue { border-top-color: var(--red); animation: overduePulse 1.6s infinite; }
+  @keyframes overduePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.75; } }
   .kcard h2 { margin: 0 0 8px; font-size: 22px; }
   .kcard li { font-size: 16px; margin-bottom: 4px; display:flex; justify-content:space-between; align-items:center; gap:6px; }
   .timer { font-size: 12px; color: var(--text-dim); }
@@ -134,6 +136,9 @@
     <button class="ghost" style="width:auto" onclick="custShowOrderHistory()">📋 My Orders</button>
   </div>
 
+  <div class="container" style="padding-bottom:0">
+    <input id="menuSearchInput" placeholder="Search menu..." oninput="custRenderMenu()">
+  </div>
   <div class="tabs" id="categoryTabs"></div>
 
   <div class="container" id="menuList">
@@ -165,7 +170,7 @@
       <h2 style="margin-top:0;color:var(--gold-soft)">Order Status</h2>
       <div id="historyList"></div>
       <div class="grid-2" style="margin-top:10px">
-        <button class="secondary" onclick="custCallWaiter()">🔔 Call Waiter</button>
+        <button class="secondary" id="callWaiterBtn" onclick="custCallWaiter()">🔔 Call Waiter</button>
         <button onclick="custRequestBill()">🧾 Request Bill</button>
       </div>
       <button class="secondary" style="margin-top:8px" onclick="custCloseHistory()">Close</button>
@@ -815,9 +820,14 @@ function isItemScheduledNow(item) {
 function custRenderMenu() {
   let list = custActiveCategory === 'all' ? custMenuItems : custMenuItems.filter(i => i.category === custActiveCategory);
   list = list.filter(isItemScheduledNow);
+  const searchBox = document.getElementById('menuSearchInput');
+  const searchTerm = searchBox ? searchBox.value.toLowerCase().trim() : '';
+  if (searchTerm) {
+    list = list.filter(i => i.name.toLowerCase().includes(searchTerm) || (i.description || '').toLowerCase().includes(searchTerm));
+  }
   const wrap = document.getElementById('menuList');
   if (list.length === 0) {
-    wrap.innerHTML = '<div class="empty-state">No items available right now.</div>';
+    wrap.innerHTML = `<div class="empty-state">${searchTerm ? 'No items match your search.' : 'No items available right now.'}</div>`;
     return;
   }
   wrap.innerHTML = list.map(item => {
@@ -971,10 +981,20 @@ function custSubmitFeedback(orderId, table) {
 }
 
 function custCallWaiter() {
+  const btn = document.getElementById('callWaiterBtn');
+  if (btn && btn.disabled) return;
   db.collection('tables').doc(custTableId).set({
     waiterCall: true,
     waiterCallAt: firebase.firestore.FieldValue.serverTimestamp()
-  }, { merge: true }).then(() => toast('🔔 Waiter has been notified'));
+  }, { merge: true }).then(() => {
+    toast('🔔 Waiter has been notified');
+    if (btn) {
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = '✓ Waiter Notified';
+      setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 60000);
+    }
+  });
 }
 
 function custRequestBill() {
@@ -1224,20 +1244,48 @@ function waiterGenerateQR() {
       <strong>Table ${tableId.replace(/^T0*/,'')}</strong>
       <div id="waiterQrCanvas" style="display:flex;justify-content:center;margin:10px 0"></div>
       <p class="small">Show this to the customer to scan</p>
+      <button class="secondary" onclick="waiterPrintQR('${tableId}')">🖨️ Print This QR</button>
     </div>`;
   new QRCode(document.getElementById('waiterQrCanvas'), { text: url, width: 180, height: 180 });
+}
+function waiterPrintQR(tableId) {
+  const canvas = document.querySelector('#waiterQrCanvas canvas');
+  if (!canvas) { alert('Generate the QR code first.'); return; }
+  const html = '<html><head><title>Table ' + tableId.replace(/^T0*/,'') + ' QR Code</title><style>' +
+    'body{font-family:sans-serif;text-align:center;padding:40px;} img{width:220px;height:220px;}</style></head><body>' +
+    '<h2>Table ' + tableId.replace(/^T0*/,'') + '</h2><img src="' + canvas.toDataURL() + '"></body></html>';
+  const win = window.open('', '_blank');
+  if (!win) { alert('Please allow pop-ups to print this QR code.'); return; }
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  setTimeout(() => win.print(), 400);
 }
 
 // ============================================================
 // KITCHEN VIEW
 // ============================================================
 function kitchenInit() {
+  loadMgmtSettings();
   kitchenListenOrders();
   setInterval(kitchenRefreshTimers, 30000);
 }
 
+let kitchenFirstSnapshotDone = false;
 function kitchenListenOrders() {
   db.collection('orders').where('status', 'in', ['new', 'preparing']).onSnapshot(snap => {
+    // Beep once for each order that's genuinely new since this screen loaded — but never
+    // on the very first load, or every existing order would beep at once.
+    if (kitchenFirstSnapshotDone) {
+      snap.docChanges().forEach(change => {
+        if (change.type === 'added' && change.doc.data().status === 'new' && !change.doc.data().noKitchen) {
+          playBeep();
+        }
+      });
+    }
+    kitchenFirstSnapshotDone = true;
+
+    const overdueMinutes = mgmtSettings.estimatedPrepMinutes || 15;
     const orders = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .filter(o => !o.noKitchen)
       .sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
@@ -1246,8 +1294,11 @@ function kitchenListenOrders() {
       board.innerHTML = '<div class="empty-state" style="grid-column:1/-1">All caught up 🎉</div>';
       return;
     }
-    board.innerHTML = orders.map(o => `
-      <div class="card kcard ${o.status}" data-created="${o.createdAt?.seconds || ''}">
+    board.innerHTML = orders.map(o => {
+      const ageSeconds = o.createdAt ? (Date.now() / 1000 - o.createdAt.seconds) : 0;
+      const overdue = ageSeconds > overdueMinutes * 60 ? ' overdue' : '';
+      return `
+      <div class="card kcard ${o.status}${overdue}" data-created="${o.createdAt?.seconds || ''}">
         <h2>Table ${o.table.replace(/^T0*/,'')}</h2>
         <p class="small">Order #${o.orderNumber || '—'}</p>
         <span class="badge ${o.status}">${o.status === 'new' ? 'New' : 'Preparing'}</span>
@@ -1257,7 +1308,8 @@ function kitchenListenOrders() {
         ${o.status === 'new'
           ? `<button onclick="kitchenStartPreparing('${o.id}')">Start Preparing</button>`
           : `<button onclick="kitchenMarkReady('${o.id}')">Ready to Serve</button>`}
-      </div>`).join('');
+      </div>`;
+    }).join('');
   });
 }
 
@@ -1268,11 +1320,14 @@ function kitchenTimeAgo(ts) {
   return Math.floor(secs / 60) + ' min ago';
 }
 function kitchenRefreshTimers() {
+  const overdueMinutes = mgmtSettings.estimatedPrepMinutes || 15;
   document.querySelectorAll('#kitchenBoard [data-created]').forEach(el => {
     const secs = el.dataset.created;
     if (secs) {
+      const ageSeconds = Date.now() / 1000 - parseInt(secs);
       const p = el.querySelector('.timer');
       if (p) p.textContent = kitchenTimeAgo({ seconds: parseInt(secs) });
+      el.classList.toggle('overdue', ageSeconds > overdueMinutes * 60);
     }
   });
 }
@@ -1946,6 +2001,7 @@ function adminRenderQR() {
         <input id="tableCount" type="number" value="20" style="margin-bottom:0">
         <button style="width:auto;margin-left:8px" onclick="adminGenerateAllQR()">Generate</button>
       </div>
+      <button class="secondary" style="margin-top:8px" onclick="adminPrintAllQR()">🖨️ Print All QR Codes</button>
     </div>
     <div id="qrGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"></div>`;
 }
@@ -1973,6 +2029,33 @@ function adminGenerateAllQR() {
     }
     batch.commit();
   });
+}
+function adminPrintAllQR() {
+  const grid = document.getElementById('qrGrid');
+  const boxes = grid ? grid.querySelectorAll('.qr-box') : [];
+  if (boxes.length === 0) { alert('Tap Generate first to create the QR codes.'); return; }
+  let html = '<html><head><title>Table QR Codes</title><style>' +
+    'body{font-family:sans-serif;padding:20px;} ' +
+    '.qr-box{display:inline-block;text-align:center;padding:14px;border:1px solid #ccc;margin:8px;border-radius:8px;width:150px;vertical-align:top;} ' +
+    '.qr-box img{width:110px;height:110px;}</style></head><body>';
+  boxes.forEach(box => {
+    const canvas = box.querySelector('canvas');
+    const existingImg = box.querySelector('img');
+    const label = box.querySelector('strong') ? box.querySelector('strong').textContent : '';
+    const subEl = box.querySelectorAll('p')[0];
+    const sub = subEl ? subEl.textContent : '';
+    let imgTag = '';
+    if (canvas) imgTag = '<img src="' + canvas.toDataURL() + '">';
+    else if (existingImg) imgTag = '<img src="' + existingImg.src + '">';
+    html += `<div class="qr-box"><strong>${label}</strong><br>${imgTag}<br>${sub}</div>`;
+  });
+  html += '</body></html>';
+  const win = window.open('', '_blank');
+  if (!win) { alert('Please allow pop-ups to print QR codes.'); return; }
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  setTimeout(() => win.print(), 400);
 }
 
 function adminRenderFeedback() {
