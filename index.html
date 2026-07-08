@@ -309,6 +309,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script>
 // ============================================================
 // ROUTER + SHARED HELPERS
@@ -467,7 +468,7 @@ function startBroadcastListener() {
       document.getElementById('broadcastText').textContent = '📢 ' + data.text;
       document.getElementById('broadcastBanner').style.display = 'flex';
     }
-  });
+  }, err => console.warn('Broadcast listener error:', err.message));
 }
 function dismissBroadcast() {
   db.collection('broadcast').doc('current').get().then(doc => {
@@ -977,7 +978,7 @@ function custSubmitFeedback(orderId, table) {
     localStorage.setItem('rated_' + orderId, '1');
     toast('Thank you for your feedback! 🙏');
     document.getElementById('rate-' + orderId).innerHTML = '<p class="small">✅ Rated</p>';
-  });
+  }).catch(err => toast('Could not submit feedback: ' + err.message));
 }
 
 function custCallWaiter() {
@@ -1596,8 +1597,13 @@ function adminRenderMenuAdmin() {
       const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       const wrap = document.getElementById('adminContent');
       wrap.innerHTML = `
+        <div class="card">
+          <p class="small">Import menu items from a CSV file — matches existing items by name to update them, everything else is added new.</p>
+          <input type="file" id="csvFileInput" accept=".csv" onchange="adminImportCSV(event)">
+          <button class="secondary" onclick="adminDownloadCSVTemplate()">⬇️ Download CSV Template</button>
+        </div>
         <button class="secondary" style="margin-bottom:12px" onclick="adminOpenCatSheet()">+ Manage Categories (${adminCategoriesCache.length})</button>
-      ` + (items.length === 0 ? '<div class="empty-state">No menu items yet. Tap + to add one.</div>' :
+      ` + (items.length === 0 ? '<div class="empty-state">No menu items yet. Tap + to add one, or import a CSV above.</div>' :
         items.map(i => {
           const cat = adminCategoriesCache.find(c => c.id === i.category);
           return `<div class="card row">
@@ -1619,6 +1625,110 @@ function adminRenderMenuAdmin() {
 function adminToggleMenuAvailability(id, available) {
   db.collection('menu').doc(id).update({ available });
   logActivity('toggle_menu_availability', id + ' -> ' + available);
+}
+
+// ---- CSV menu import ----
+function adminDownloadCSVTemplate() {
+  const csv = 'name,category,price,image,description,available,readyToServe,scheduleStart,scheduleEnd\n' +
+    'Masala Dosa,Breakfast,80,,Crispy rice crepe with spiced potato filling,TRUE,FALSE,,\n' +
+    'Filter Coffee,Beverages,30,,Traditional South Indian filter coffee,TRUE,TRUE,,\n' +
+    'Paneer Butter Masala,Main Course,220,,Cottage cheese in a rich tomato gravy,TRUE,FALSE,,\n';
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'menu-template.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function adminImportCSV(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (typeof Papa === 'undefined') {
+    alert('CSV parser failed to load. Check your internet connection and try again.');
+    event.target.value = '';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    Papa.parse(e.target.result, {
+      header: true,
+      skipEmptyLines: true,
+      complete: function(results) { adminProcessCSVRows(results.data); },
+      error: function(err) { alert('Could not read that CSV: ' + err.message); }
+    });
+  };
+  reader.onerror = function() { alert('Could not read that file.'); };
+  reader.readAsText(file);
+  event.target.value = '';
+}
+
+function parseCSVBool(val, defaultVal) {
+  if (val === undefined || val === null || val === '') return defaultVal;
+  return ['true', '1', 'yes', 'y'].includes(String(val).trim().toLowerCase());
+}
+
+function adminProcessCSVRows(rows) {
+  if (!rows || rows.length === 0) { alert('No rows found in that CSV.'); return; }
+  Promise.all([db.collection('categories').get(), db.collection('menu').get()]).then(([catSnap, menuSnap]) => {
+    const categories = catSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const existingItems = menuSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const catByName = {};
+    categories.forEach(c => catByName[(c.name || '').toLowerCase().trim()] = c.id);
+    let nextOrder = categories.length;
+    const ops = [];
+    let newCatCount = 0, newItemCount = 0, updatedItemCount = 0, skipped = 0;
+
+    rows.forEach(row => {
+      const name = (row.name || row.Name || '').toString().trim();
+      if (!name) { skipped++; return; }
+      const categoryName = (row.category || row.Category || '').toString().trim();
+      let categoryId = categoryName ? catByName[categoryName.toLowerCase()] : null;
+      if (categoryName && !categoryId) {
+        const catRef = db.collection('categories').doc();
+        ops.push({ ref: catRef, data: { name: categoryName, order: nextOrder++ } });
+        catByName[categoryName.toLowerCase()] = catRef.id;
+        categoryId = catRef.id;
+        newCatCount++;
+      }
+      const price = parseFloat(row.price || row.Price) || 0;
+      const image = (row.image || row.Image || '').toString().trim();
+      const description = (row.description || row.Description || '').toString().trim();
+      const available = parseCSVBool(row.available, true);
+      const readyToServe = parseCSVBool(row.readyToServe || row.ready_to_serve, false);
+      const scheduleStart = (row.scheduleStart || row.schedule_start || '').toString().trim() || null;
+      const scheduleEnd = (row.scheduleEnd || row.schedule_end || '').toString().trim() || null;
+      const data = { name, category: categoryId, price, image, description, available, readyToServe, scheduleStart, scheduleEnd };
+
+      const existing = existingItems.find(i => (i.name || '').toLowerCase() === name.toLowerCase());
+      if (existing) {
+        ops.push({ ref: db.collection('menu').doc(existing.id), data });
+        updatedItemCount++;
+      } else {
+        ops.push({ ref: db.collection('menu').doc(), data });
+        newItemCount++;
+      }
+    });
+
+    if (ops.length === 0) { alert('Nothing to import — every row was missing a name.'); return; }
+
+    adminCommitInChunks(ops, 0).then(() => {
+      logActivity('import_menu_csv', newItemCount + ' new, ' + updatedItemCount + ' updated, ' + newCatCount + ' new categories, ' + skipped + ' skipped');
+      alert('Import complete: ' + newItemCount + ' new item(s), ' + updatedItemCount + ' updated, ' +
+        newCatCount + ' new categor' + (newCatCount === 1 ? 'y' : 'ies') +
+        (skipped ? ', ' + skipped + ' row(s) skipped (missing name)' : '') + '.');
+      adminLoadCategoriesCache(() => adminRenderMenuAdmin());
+    }).catch(err => alert('Import failed partway through: ' + err.message));
+  }).catch(err => alert('Could not read your current menu to import against: ' + err.message));
+}
+
+function adminCommitInChunks(ops, startIndex) {
+  const chunk = ops.slice(startIndex, startIndex + 400);
+  if (chunk.length === 0) return Promise.resolve();
+  const batch = db.batch();
+  chunk.forEach(op => batch.set(op.ref, op.data, { merge: true }));
+  return batch.commit().then(() => adminCommitInChunks(ops, startIndex + 400));
 }
 
 function adminOpenAddSheet() {
@@ -2069,6 +2179,10 @@ function adminRenderFeedback() {
         const f = d.data();
         return `<div class="card row"><span>Table ${f.table.replace(/^T0*/,'')}</span><span>${'★'.repeat(f.rating)}${'☆'.repeat(5-f.rating)}</span></div>`;
       }).join('');
+  }).catch(err => {
+    if (adminMoreView !== 'feedback') return;
+    const el = document.getElementById('moreContent');
+    if (el) el.innerHTML = '<div class="empty-state">Could not load feedback: ' + err.message + '</div>';
   });
 }
 
@@ -2081,6 +2195,10 @@ function adminRenderLogs() {
       const l = d.data();
       return `<div class="card small"><strong>${l.actor}</strong> (${l.role}) — ${l.action} ${l.detail ? '· ' + l.detail : ''}</div>`;
     }).join('');
+  }).catch(err => {
+    if (adminMoreView !== 'logs') return;
+    const el = document.getElementById('moreContent');
+    if (el) el.innerHTML = '<div class="empty-state">Could not load activity log: ' + err.message + '</div>';
   });
 }
 
@@ -2104,6 +2222,10 @@ function adminRenderPerformance() {
       <div class="card"><p class="small">Top Selling Items (Today)</p>
         ${topItems.map(([n,q]) => `<div class="row small"><span>${n}</span><strong>${q}</strong></div>`).join('') || '<p class="small">No sales yet today.</p>'}
       </div>`;
+  }).catch(err => {
+    if (adminMoreView !== 'performance') return;
+    const el = document.getElementById('moreContent');
+    if (el) el.innerHTML = '<div class="empty-state">Could not load performance data: ' + err.message + '</div>';
   });
 }
 
@@ -2119,6 +2241,10 @@ function adminRenderBroadcast() {
         <button onclick="adminSendBroadcast()">Send to All Staff</button>
         ${current.active ? '<button class="secondary" style="margin-top:8px" onclick="adminClearBroadcast()">Clear Current Broadcast</button>' : ''}
       </div>`;
+  }).catch(err => {
+    if (adminMoreView !== 'broadcast') return;
+    const el = document.getElementById('moreContent');
+    if (el) el.innerHTML = '<div class="empty-state">Could not load broadcast: ' + err.message + '</div>';
   });
 }
 function adminSendBroadcast() {
@@ -2126,10 +2252,13 @@ function adminSendBroadcast() {
   if (!text) return;
   db.collection('broadcast').doc('current').set({
     text, active: true, timestamp: firebase.firestore.FieldValue.serverTimestamp()
-  }).then(() => { toast('Broadcast sent'); logActivity('broadcast', text); });
+  }).then(() => { toast('Broadcast sent'); logActivity('broadcast', text); })
+    .catch(err => alert('Could not send broadcast: ' + err.message));
 }
 function adminClearBroadcast() {
-  db.collection('broadcast').doc('current').set({ active: false }, { merge: true }).then(() => adminRenderBroadcast());
+  db.collection('broadcast').doc('current').set({ active: false }, { merge: true })
+    .then(() => adminRenderBroadcast())
+    .catch(err => alert('Could not clear broadcast: ' + err.message));
 }
 
 function adminRenderSettings() {
