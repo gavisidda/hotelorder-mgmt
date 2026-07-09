@@ -271,6 +271,13 @@
       <input id="itemScheduleStart" type="time" style="margin-bottom:0">
       <input id="itemScheduleEnd" type="time" style="margin-bottom:0">
     </div>
+    <label class="row"><span>Track stock for this item</span><input type="checkbox" id="itemTrackStock" style="width:auto" onchange="document.getElementById('stockFields').style.display=this.checked?'block':'none'"></label>
+    <div id="stockFields" style="display:none">
+      <p class="small">Current stock quantity (goes down automatically as orders come in)</p>
+      <input id="itemStockQty" type="number" min="0" placeholder="e.g. 20">
+      <p class="small">Low-stock alert threshold</p>
+      <input id="itemLowStockThreshold" type="number" min="0" placeholder="e.g. 5" value="5">
+    </div>
     <button onclick="adminSaveMenuItem()">Save Item</button>
     <button class="secondary" style="margin-top:8px" onclick="closeSheet('menuSheet')">Cancel</button>
   </div>
@@ -397,7 +404,7 @@ function cancelOrderItem(orderId, itemIndex) {
   reason = reason.trim();
   if (!reason) { alert('A cancellation reason is required.'); return; }
   db.collection('orders').doc(orderId).get().then(doc => {
-    if (!doc.exists) return;
+    if (!doc.exists) { alert('That order could not be found — it may have already been billed or removed.'); return; }
     const o = doc.data();
     const items = o.items;
     items[itemIndex].cancelled = true;
@@ -405,8 +412,8 @@ function cancelOrderItem(orderId, itemIndex) {
     const newTotal = items.reduce((s, i) => s + (i.cancelled ? 0 : i.price * i.qty), 0);
     db.collection('orders').doc(orderId).update({ items, total: newTotal }).then(() => {
       logActivity('cancel_item', o.table + ' - ' + items[itemIndex].name + ': ' + reason);
-    });
-  });
+    }).catch(err => alert('Could not cancel that item: ' + err.message));
+  }).catch(err => alert('Could not load that order: ' + err.message));
 }
 
 function renderItemsList(order, editable, opts) {
@@ -476,7 +483,7 @@ function dismissBroadcast() {
       lastSeenBroadcastId = String(doc.data().timestamp.seconds);
       sessionStorage.setItem('lastSeenBroadcastId', lastSeenBroadcastId);
     }
-  });
+  }).catch(() => {});
   document.getElementById('broadcastBanner').style.display = 'none';
 }
 
@@ -882,6 +889,27 @@ function generateOrderNumber() {
   return dd + mm + '-' + hh + mi;
 }
 
+// Decrements stock for any tracked items in an order, and auto-hides an item once it hits 0.
+// Runs after the order is already placed and never blocks or fails the order itself —
+// stock tracking is a helpful extra, not a hard reservation system.
+function custDecrementStock(items) {
+  const trackedRefs = items.filter(i => i.itemId).map(i => ({ ref: db.collection('menu').doc(i.itemId), qty: i.qty }));
+  if (trackedRefs.length === 0) return;
+  db.runTransaction(t => {
+    return Promise.all(trackedRefs.map(r => t.get(r.ref))).then(docs => {
+      docs.forEach((doc, idx) => {
+        if (!doc.exists) return;
+        const data = doc.data();
+        if (!data.trackStock) return;
+        const newQty = Math.max(0, (data.stockQty || 0) - trackedRefs[idx].qty);
+        const update = { stockQty: newQty };
+        if (newQty === 0) update.available = false;
+        t.update(trackedRefs[idx].ref, update);
+      });
+    });
+  }).catch(err => console.warn('Stock update skipped:', err.message));
+}
+
 function custPlaceOrder() {
   const entries = Object.entries(custCart);
   if (entries.length === 0) return;
@@ -914,6 +942,8 @@ function custPlaceOrder() {
       lastOrderId: ref.id,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
+
+    custDecrementStock(items);
 
     let history = JSON.parse(localStorage.getItem('orderHistory_' + custTableId) || '[]');
     if (history.length === 0) {
@@ -955,6 +985,8 @@ function custShowOrderHistory() {
           </div>` : ''}
         </div>`;
       }).join('') || '<div class="empty-state">No orders found.</div>';
+    }).catch(err => {
+      wrap.innerHTML = '<div class="empty-state">Could not load your orders: ' + err.message + '</div>';
     });
   }
   document.getElementById('historySheet').style.display = 'block';
@@ -995,14 +1027,15 @@ function custCallWaiter() {
       btn.textContent = '✓ Waiter Notified';
       setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 60000);
     }
-  });
+  }).catch(err => toast('Could not reach staff — please try again: ' + err.message));
 }
 
 function custRequestBill() {
   db.collection('tables').doc(custTableId).set({
     billRequested: true,
     billRequestedAt: firebase.firestore.FieldValue.serverTimestamp()
-  }, { merge: true }).then(() => toast('🧾 Bill requested — cashier notified'));
+  }, { merge: true }).then(() => toast('🧾 Bill requested — cashier notified'))
+    .catch(err => toast('Could not request the bill — please try again: ' + err.message));
 }
 
 // ============================================================
@@ -1072,13 +1105,13 @@ function waiterRenderOrders() {
 
 function waiterServeItem(orderId, itemIndex) {
   db.collection('orders').doc(orderId).get().then(doc => {
-    if (!doc.exists) return;
+    if (!doc.exists) { toast('That order could not be found.'); return; }
     const o = doc.data();
     o.items[itemIndex].served = true;
     db.collection('orders').doc(orderId).update({ items: o.items }).then(() => {
       logActivity('serve_item', o.table + ' - ' + o.items[itemIndex].name);
-    });
-  });
+    }).catch(err => toast('Could not mark that item served: ' + err.message));
+  }).catch(err => toast('Could not load that order: ' + err.message));
 }
 
 function waiterAcceptOrder(id) {
@@ -1087,34 +1120,36 @@ function waiterAcceptOrder(id) {
     status: 'preparing',
     acceptedBy: (session && session.name) || '',
     acceptedAt: firebase.firestore.FieldValue.serverTimestamp()
-  });
-  logActivity('accept_order', id);
+  }).then(() => logActivity('accept_order', id))
+    .catch(err => toast('Could not accept that order: ' + err.message));
 }
 function waiterServeNow(id) {
   const session = getStaffSession();
   db.collection('orders').doc(id).get().then(doc => {
-    if (!doc.exists) return;
+    if (!doc.exists) { toast('That order could not be found.'); return; }
     const items = doc.data().items.map(i => i.cancelled ? i : { ...i, served: true });
     db.collection('orders').doc(id).update({
       status: 'served', items,
       acceptedBy: (session && session.name) || '',
       servedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    logActivity('serve_direct_no_kitchen', id);
-  });
+    }).then(() => logActivity('serve_direct_no_kitchen', id))
+      .catch(err => toast('Could not serve that order: ' + err.message));
+  }).catch(err => toast('Could not load that order: ' + err.message));
 }
 function waiterMarkServed(id) {
   db.collection('orders').doc(id).get().then(doc => {
-    if (!doc.exists) return;
+    if (!doc.exists) { toast('That order could not be found.'); return; }
     const items = doc.data().items.map(i => i.cancelled ? i : { ...i, served: true });
-    db.collection('orders').doc(id).update({ status: 'served', items, servedAt: firebase.firestore.FieldValue.serverTimestamp() });
-    logActivity('mark_served', id);
-  });
+    db.collection('orders').doc(id).update({ status: 'served', items, servedAt: firebase.firestore.FieldValue.serverTimestamp() })
+      .then(() => logActivity('mark_served', id))
+      .catch(err => toast('Could not mark that order served: ' + err.message));
+  }).catch(err => toast('Could not load that order: ' + err.message));
 }
 function waiterCancelOrder(id) {
   if (!confirm('Cancel this entire order?')) return;
-  db.collection('orders').doc(id).update({ status: 'cancelled', cancelledAt: firebase.firestore.FieldValue.serverTimestamp() });
-  logActivity('cancel_order', id);
+  db.collection('orders').doc(id).update({ status: 'cancelled', cancelledAt: firebase.firestore.FieldValue.serverTimestamp() })
+    .then(() => logActivity('cancel_order', id))
+    .catch(err => toast('Could not cancel that order: ' + err.message));
 }
 
 // ---- Table transfer (move an occupied table's active orders to another table) ----
@@ -1137,9 +1172,9 @@ function transferTable(fromTable, toTable) {
       batch.commit().then(() => {
         logActivity('transfer_table', fromTable + ' -> ' + toTable + ' (' + snap.size + ' order(s))');
         toast('Moved ' + snap.size + ' order(s) from Table ' + fromTable.replace(/^T0*/,'') + ' to Table ' + toTable.replace(/^T0*/,''));
-      });
-    });
-  });
+      }).catch(err => alert('Transfer failed: ' + err.message));
+    }).catch(err => alert('Could not read the source table: ' + err.message));
+  }).catch(err => alert('Could not look up orders for that table: ' + err.message));
 }
 function doTransferTable() {
   const from = document.getElementById('transferFrom').value;
@@ -1194,7 +1229,7 @@ function waiterSetTableStatus(id) {
   db.collection('tables').doc(id).update({ status }).then(() => {
     logActivity('set_table_status', id + ' -> ' + status);
     toast('Table ' + id.replace(/^T0*/,'') + ' set to ' + status);
-  });
+  }).catch(err => toast('Could not update that table: ' + err.message));
 }
 
 function waiterRenderCalls() {
@@ -1235,6 +1270,8 @@ function waiterRenderQR() {
         <button onclick="waiterGenerateQR()">Generate QR</button>
       </div>
       <div id="waiterQrResult"></div>`;
+  }).catch(err => {
+    document.getElementById('waiterContent').innerHTML = '<div class="empty-state">Could not load tables: ' + err.message + '</div>';
   });
 }
 function waiterGenerateQR() {
@@ -1519,8 +1556,9 @@ function adminRenderOverview() {
     db.collection('bills').where('createdAt', '>=', startOfDay).get(),
     db.collection('tables').where('status', '==', 'occupied').get(),
     db.collection('orders').where('status', 'in', ['ready','served','billed']).get(),
-    db.collection('orders').where('createdAt', '>=', startOfDay).get()
-  ]).then(([bills, occTables, timedOrders, todayOrders]) => {
+    db.collection('orders').where('createdAt', '>=', startOfDay).get(),
+    db.collection('menu').where('trackStock', '==', true).get()
+  ]).then(([bills, occTables, timedOrders, todayOrders, stockedItems]) => {
     if (adminActiveTab !== 'overview') return;
     const salesToday = bills.docs.reduce((s, d) => s + d.data().total, 0);
     let prepTimes = [];
@@ -1536,6 +1574,7 @@ function adminRenderOverview() {
       else if (st === 'billed') completed++;
       else if (st === 'cancelled') cancelled++;
     });
+    const lowStockItems = stockedItems.docs.map(d => d.data()).filter(i => (i.stockQty || 0) <= (i.lowStockThreshold || 5));
     document.getElementById('adminContent').innerHTML = `
       <div class="stat-row">
         <div class="card"><p class="small">Today's Sales</p><h2>₹${salesToday}</h2></div>
@@ -1545,9 +1584,16 @@ function adminRenderOverview() {
         <div class="card"><p class="small">Occupied Tables</p><h2>${occTables.size}</h2></div>
         <div class="card"><p class="small">Avg Prep Time</p><h2>${avgPrep}m</h2></div>
       </div>
+      ${lowStockItems.length > 0 ? `<div class="card">
+        <p class="small">⚠️ Low Stock (${lowStockItems.length})</p>
+        ${lowStockItems.map(i => `<div class="row small"><span>${i.name}</span><strong>${i.stockQty || 0} left</strong></div>`).join('')}
+      </div>` : ''}
       <div class="card">
         <p class="small">Use Orders, Menu, Staff, Billing and More tabs below to manage your restaurant.</p>
       </div>`;
+  }).catch(err => {
+    if (adminActiveTab !== 'overview') return;
+    document.getElementById('adminContent').innerHTML = '<div class="empty-state">Could not load the overview: ' + err.message + '</div>';
   });
 }
 
@@ -1579,6 +1625,10 @@ function adminRenderOrders() {
           <span>${o.acceptedBy ? 'Waiter: '+o.acceptedBy : ''}</span>
         </div>
       </div>`).join('');
+  }, err => {
+    if (adminActiveTab !== 'orders') return;
+    const list = document.getElementById('ordersList');
+    if (list) list.innerHTML = '<div class="empty-state">Could not load orders: ' + err.message + '</div>';
   });
 }
 function adminFilterOrders(f) { adminOrderFilter = f; sessionStorage.setItem('adminOrderFilter', f); adminRenderOrders(); }
@@ -1587,7 +1637,7 @@ function adminLoadCategoriesCache(cb) {
   db.collection('categories').orderBy('order').get().then(snap => {
     adminCategoriesCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     if (cb) cb();
-  });
+  }).catch(err => alert('Could not load categories: ' + err.message));
 }
 
 function adminRenderMenuAdmin() {
@@ -1609,7 +1659,7 @@ function adminRenderMenuAdmin() {
           return `<div class="card row">
             <div>
               <strong>${i.name}</strong> <span class="small">₹${i.price}</span>
-              <p class="small">${cat ? cat.name : 'Uncategorized'} ${i.available ? '' : '· Hidden'} ${i.readyToServe ? '· Ready-to-serve' : ''} ${i.scheduleStart ? '· '+i.scheduleStart+'–'+i.scheduleEnd : ''}</p>
+              <p class="small">${cat ? cat.name : 'Uncategorized'} ${i.available ? '' : '· Hidden'} ${i.readyToServe ? '· Ready-to-serve' : ''} ${i.scheduleStart ? '· '+i.scheduleStart+'–'+i.scheduleEnd : ''} ${i.trackStock ? '· Stock: ' + (i.stockQty || 0) + (((i.stockQty||0) <= (i.lowStockThreshold||5)) ? ' ⚠️ Low' : '') : ''}</p>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
               <button style="width:auto" class="secondary" onclick="adminToggleMenuAvailability('${i.id}', ${!i.available})">${i.available ? 'Hide' : 'Show'}</button>
@@ -1747,6 +1797,10 @@ function adminOpenMenuSheet() {
   document.getElementById('itemReadyToServe').checked = false;
   document.getElementById('itemScheduleStart').value = '';
   document.getElementById('itemScheduleEnd').value = '';
+  document.getElementById('itemTrackStock').checked = false;
+  document.getElementById('itemStockQty').value = '';
+  document.getElementById('itemLowStockThreshold').value = '5';
+  document.getElementById('stockFields').style.display = 'none';
   const sel = document.getElementById('itemCategory');
   sel.innerHTML = adminCategoriesCache.map(c => `<option value="${c.id}">${c.name}</option>`).join('') || '<option value="">Add a category first</option>';
   document.getElementById('menuSheet').style.display = 'block';
@@ -1765,10 +1819,15 @@ function adminEditMenuItem(item) {
   document.getElementById('itemReadyToServe').checked = !!item.readyToServe;
   document.getElementById('itemScheduleStart').value = item.scheduleStart || '';
   document.getElementById('itemScheduleEnd').value = item.scheduleEnd || '';
+  document.getElementById('itemTrackStock').checked = !!item.trackStock;
+  document.getElementById('itemStockQty').value = (item.stockQty !== undefined && item.stockQty !== null) ? item.stockQty : '';
+  document.getElementById('itemLowStockThreshold').value = (item.lowStockThreshold !== undefined && item.lowStockThreshold !== null) ? item.lowStockThreshold : 5;
+  document.getElementById('stockFields').style.display = item.trackStock ? 'block' : 'none';
 }
 
 function adminSaveMenuItem() {
   const id = document.getElementById('menuItemId').value;
+  const trackStock = document.getElementById('itemTrackStock').checked;
   const data = {
     name: document.getElementById('itemName').value.trim(),
     category: document.getElementById('itemCategory').value,
@@ -1778,20 +1837,24 @@ function adminSaveMenuItem() {
     available: document.getElementById('itemAvailable').checked,
     readyToServe: document.getElementById('itemReadyToServe').checked,
     scheduleStart: document.getElementById('itemScheduleStart').value || null,
-    scheduleEnd: document.getElementById('itemScheduleEnd').value || null
+    scheduleEnd: document.getElementById('itemScheduleEnd').value || null,
+    trackStock,
+    stockQty: trackStock ? (parseInt(document.getElementById('itemStockQty').value) || 0) : null,
+    lowStockThreshold: trackStock ? (parseInt(document.getElementById('itemLowStockThreshold').value) || 5) : null
   };
   if (!data.name || !data.category) { alert('Name and category are required'); return; }
   const ref = id ? db.collection('menu').doc(id) : db.collection('menu').doc();
   ref.set(data, { merge: true }).then(() => {
     logActivity('save_menu_item', data.name);
     closeSheet('menuSheet');
-  });
+  }).catch(err => alert('Could not save that menu item: ' + err.message));
 }
 
 function adminDeleteMenuItem(id) {
   adminConfirmPin(() => {
-    db.collection('menu').doc(id).delete();
-    logActivity('delete_menu_item', id);
+    db.collection('menu').doc(id).delete().then(() => {
+      logActivity('delete_menu_item', id);
+    }).catch(err => alert('Could not delete that menu item: ' + err.message));
   });
 }
 
@@ -1805,7 +1868,7 @@ function adminSaveCategory() {
   db.collection('categories').add({ name, order: adminCategoriesCache.length }).then(() => {
     closeSheet('catSheet');
     adminLoadCategoriesCache(() => adminRenderMenuAdmin());
-  });
+  }).catch(err => alert('Could not save that category: ' + err.message));
 }
 
 // ---- PIN re-authentication for destructive actions ----
@@ -1819,7 +1882,7 @@ function adminConfirmPin(onSuccess) {
     } else {
       alert('Incorrect PIN. Action cancelled.');
     }
-  });
+  }).catch(err => alert('Could not verify your PIN right now: ' + err.message));
 }
 
 // ---- STAFF directory ----
@@ -1861,6 +1924,9 @@ function adminRenderStaff() {
           </div>
         </div>`;
       }).join('');
+  }).catch(err => {
+    if (adminActiveTab !== 'staff') return;
+    document.getElementById('adminContent').innerHTML = '<div class="empty-state">Could not load staff: ' + err.message + '</div>';
   });
 }
 
@@ -1869,16 +1935,18 @@ function adminApproveUser(id) {
   db.collection('users').doc(id).update({ role, active: true }).then(() => {
     logActivity('approve_user', id + ' -> ' + role);
     toast('Role updated');
-  });
+  }).catch(err => alert('Could not update that role: ' + err.message));
 }
 function adminToggleUser(id, active) {
-  db.collection('users').doc(id).update({ active });
-  logActivity('toggle_user', id + ' active=' + active);
+  db.collection('users').doc(id).update({ active }).then(() => {
+    logActivity('toggle_user', id + ' active=' + active);
+  }).catch(err => alert('Could not update that staff member: ' + err.message));
 }
 function adminDeleteUser(id) {
   adminConfirmPin(() => {
-    db.collection('users').doc(id).delete();
-    logActivity('delete_user', id);
+    db.collection('users').doc(id).delete().then(() => {
+      logActivity('delete_user', id);
+    }).catch(err => alert('Could not delete that staff member: ' + err.message));
   });
 }
 function adminResetPin(id) {
@@ -1887,7 +1955,7 @@ function adminResetPin(id) {
   db.collection('users').doc(id).update({ pin: newPin.trim() }).then(() => {
     logActivity('reset_pin', id);
     toast('PIN updated');
-  });
+  }).catch(err => alert('Could not reset that PIN: ' + err.message));
 }
 
 function adminOpenUserSheet() {
@@ -1906,7 +1974,8 @@ function adminSaveUserDirect() {
   db.collection('users').add({
     mobile, name, pin, role, active: true,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  }).then(() => closeSheet('userSheet'));
+  }).then(() => closeSheet('userSheet'))
+    .catch(err => alert('Could not add that staff member: ' + err.message));
 }
 
 // ---- BILLING tab (Pending / Today / Receipts) ----
@@ -1947,6 +2016,10 @@ function adminBillingRenderPending() {
         <button onclick='cashierOpenPay(${JSON.stringify(t)}, ${JSON.stringify(orders).replace(/'/g, "&apos;")})'>Generate Bill</button>
       </div>`;
     }).join('');
+  }, err => {
+    if (adminActiveTab !== 'billing' || adminBillingView !== 'pending') return;
+    const el = document.getElementById('billingContent');
+    if (el) el.innerHTML = '<div class="empty-state">Could not load pending bills: ' + err.message + '</div>';
   });
 }
 function adminBillingRenderReport() {
@@ -1968,6 +2041,10 @@ function adminBillingRenderReport() {
       ${Object.entries(byMethod).map(([m, amt]) => `
         <div class="card row"><span>${m}</span><strong>₹${amt}</strong></div>`).join('')}
     `;
+  }, err => {
+    if (adminActiveTab !== 'billing' || adminBillingView !== 'report') return;
+    const el = document.getElementById('billingContent');
+    if (el) el.innerHTML = '<div class="empty-state">Could not load today\u2019s sales: ' + err.message + '</div>';
   });
 }
 function adminBillingRenderHistory() {
@@ -1984,6 +2061,10 @@ function adminBillingRenderHistory() {
         <button style="width:auto" class="secondary" onclick='cashierReprint(${JSON.stringify(b).replace(/'/g, "&apos;")})'>Reprint</button></div>
       </div>`;
     }).join('');
+  }).catch(err => {
+    if (adminActiveTab !== 'billing' || adminBillingView !== 'history') return;
+    const el = document.getElementById('billingContent');
+    if (el) el.innerHTML = '<div class="empty-state">Could not load receipts: ' + err.message + '</div>';
   });
 }
 
@@ -2070,6 +2151,10 @@ function adminRenderTables() {
         </div>`).join('');
     }).join('');
     el.innerHTML = addCard + summaryCard + transferCard + (groupedHtml || '<div class="empty-state">No tables yet — add one above.</div>');
+  }).catch(err => {
+    if (adminMoreView !== 'tables') return;
+    const el = document.getElementById('moreContent');
+    if (el) el.innerHTML = '<div class="empty-state">Could not load tables: ' + err.message + '</div>';
   });
 }
 function adminAddTable() {
@@ -2085,20 +2170,22 @@ function adminAddTable() {
       logActivity('add_table', tableId);
       toast('Table ' + tableId.replace(/^T0*/,'') + ' added');
       adminRenderTables();
-    });
-  });
+    }).catch(err => alert('Could not add that table: ' + err.message));
+  }).catch(err => alert('Could not check that table: ' + err.message));
 }
 function adminDeleteTable(id) {
   if (!confirm('Delete Table ' + id.replace(/^T0*/,'') + '? This does not affect any existing orders.')) return;
   db.collection('tables').doc(id).delete().then(() => {
     logActivity('delete_table', id);
     adminRenderTables();
-  });
+  }).catch(err => alert('Could not delete that table: ' + err.message));
 }
 function adminSaveTable(id) {
   const status = document.getElementById('tstatus-' + id).value;
   const assignedWaiter = document.getElementById('twaiter-' + id).value;
-  db.collection('tables').doc(id).set({ status, assignedWaiter }, { merge: true }).then(() => toast('Table updated'));
+  db.collection('tables').doc(id).set({ status, assignedWaiter }, { merge: true })
+    .then(() => toast('Table updated'))
+    .catch(err => alert('Could not update that table: ' + err.message));
 }
 
 function adminRenderQR() {
@@ -2191,15 +2278,28 @@ function adminRenderLogs() {
     if (adminMoreView !== 'logs') return;
     const el = document.getElementById('moreContent');
     if (snap.empty) { el.innerHTML = '<div class="empty-state">No activity yet.</div>'; return; }
-    el.innerHTML = snap.docs.map(d => {
-      const l = d.data();
-      return `<div class="card small"><strong>${l.actor}</strong> (${l.role}) — ${l.action} ${l.detail ? '· ' + l.detail : ''}</div>`;
-    }).join('');
+    el.innerHTML = '<button class="secondary" style="margin-bottom:10px" onclick="adminExportLogsCSV()">⬇️ Export to CSV</button>' +
+      snap.docs.map(d => {
+        const l = d.data();
+        return `<div class="card small"><strong>${l.actor}</strong> (${l.role}) — ${l.action} ${l.detail ? '· ' + l.detail : ''}</div>`;
+      }).join('');
   }).catch(err => {
     if (adminMoreView !== 'logs') return;
     const el = document.getElementById('moreContent');
     if (el) el.innerHTML = '<div class="empty-state">Could not load activity log: ' + err.message + '</div>';
   });
+}
+function adminExportLogsCSV() {
+  db.collection('activityLogs').orderBy('timestamp','desc').limit(500).get().then(snap => {
+    if (snap.empty) { alert('No activity to export.'); return; }
+    const rows = [['Timestamp', 'Actor', 'Role', 'Action', 'Detail']];
+    snap.docs.forEach(d => {
+      const l = d.data();
+      const ts = l.timestamp ? new Date(l.timestamp.seconds * 1000).toLocaleString() : '';
+      rows.push([ts, l.actor || '', l.role || '', l.action || '', l.detail || '']);
+    });
+    adminDownloadCSV(rows, 'activity-log.csv');
+  }).catch(err => alert('Could not export: ' + err.message));
 }
 
 function adminRenderPerformance() {
@@ -2216,6 +2316,7 @@ function adminRenderPerformance() {
     const topItems = Object.entries(itemCounts).sort((a,b) => b[1]-a[1]).slice(0,5);
     const el = document.getElementById('moreContent');
     el.innerHTML = `
+      <button class="secondary" style="margin-bottom:10px" onclick="adminExportSalesCSV()">⬇️ Export Today's Sales to CSV</button>
       <div class="card"><p class="small">Sales by Cashier (Today)</p>
         ${Object.entries(byCashier).map(([c,amt]) => `<div class="row small"><span>${c || 'Unknown'}</span><strong>₹${amt}</strong></div>`).join('') || '<p class="small">No sales yet today.</p>'}
       </div>
@@ -2227,6 +2328,33 @@ function adminRenderPerformance() {
     const el = document.getElementById('moreContent');
     if (el) el.innerHTML = '<div class="empty-state">Could not load performance data: ' + err.message + '</div>';
   });
+}
+function adminExportSalesCSV() {
+  const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
+  db.collection('bills').where('createdAt','>=',startOfDay).orderBy('createdAt').get().then(snap => {
+    if (snap.empty) { alert('No sales yet today to export.'); return; }
+    const rows = [['Time', 'Table', 'Order(s)', 'Items', 'Subtotal', 'Discount', 'Total', 'Payment Method', 'Cashier']];
+    snap.docs.forEach(d => {
+      const b = d.data();
+      const ts = b.createdAt ? new Date(b.createdAt.seconds * 1000).toLocaleTimeString() : '';
+      const itemsText = (b.items || []).map(i => i.qty + 'x ' + i.name).join('; ');
+      rows.push([ts, b.table.replace(/^T0*/,''), (b.orderNumbers || []).join('; '), itemsText, b.subtotal || b.total, b.discount || 0, b.total, b.paymentMethod || '', b.cashier || '']);
+    });
+    adminDownloadCSV(rows, 'sales-' + new Date().toISOString().slice(0,10) + '.csv');
+  }).catch(err => alert('Could not export: ' + err.message));
+}
+function adminDownloadCSV(rows, filename) {
+  const csv = rows.map(row => row.map(cell => {
+    const s = String(cell === undefined || cell === null ? '' : cell);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function adminRenderBroadcast() {
@@ -2283,6 +2411,10 @@ function adminRenderSettings() {
         <label class="row"><span>Require customer mobile number before ordering</span><input type="checkbox" id="settingMobileMandatory" style="width:auto" ${s.requireCustomerMobile ? 'checked' : ''}></label>
         <button onclick="adminSaveSettings()">Save Settings</button>
       </div>`;
+  }).catch(err => {
+    if (adminMoreView !== 'settings') return;
+    const el = document.getElementById('moreContent');
+    if (el) el.innerHTML = '<div class="empty-state">Could not load settings: ' + err.message + '</div>';
   });
 }
 function adminSaveSettings() {
@@ -2297,7 +2429,7 @@ function adminSaveSettings() {
   }, { merge: true }).then(() => {
     loadMgmtSettings();
     alert('Settings saved');
-  });
+  }).catch(err => alert('Could not save settings: ' + err.message));
 }
 
 appInit();
