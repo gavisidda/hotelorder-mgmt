@@ -171,7 +171,7 @@
       <div id="historyList"></div>
       <div class="grid-2" style="margin-top:10px">
         <button class="secondary" id="callWaiterBtn" onclick="custCallWaiter()">🔔 Call Waiter</button>
-        <button onclick="custRequestBill()">🧾 Request Bill</button>
+        <button onclick="custRequestBill()">🔒 Close Order & Get Bill</button>
       </div>
       <button class="secondary" style="margin-top:8px" onclick="custCloseHistory()">Close</button>
     </div>
@@ -677,6 +677,10 @@ function custInit(table) {
     }
     custTableId = normalized;
     document.getElementById('tableLabel').textContent = 'Table ' + custTableId.replace(/^T0*/, '');
+    if (tableData.orderingClosed) {
+      custShowOrderClosedScreen();
+      return Promise.reject('handled');
+    }
     return custCleanupSessionIfNeeded(custTableId);
   }).then(() => {
     custCart = JSON.parse(sessionStorage.getItem('cart_' + custTableId) || '{}');
@@ -697,22 +701,34 @@ function custInit(table) {
   });
 }
 
-// A customer's "session" at a table (their order history for it, remembered on this device)
-// is cleared once every one of their orders there is billed/cancelled, or after 2 hours —
-// whichever comes first. This keeps "My Orders" from showing a stale, finished visit, and
-// gives each new visit to the same table (even on the same phone) a clean slate.
+function custShowOrderClosedScreen() {
+  document.getElementById('view-customer').innerHTML =
+    '<div class="container" style="padding-top:70px;text-align:center">' +
+    '<h1 style="color:var(--gold-soft)">🔒 Order Closed</h1>' +
+    '<p class="small">Your order has been closed and is ready for billing. Please wait for our staff to bring your bill.</p>' +
+    '<button style="max-width:280px;margin:16px auto 0" onclick="custShowOrderHistory()">📋 View My Orders</button>' +
+    '<button class="secondary" id="callWaiterBtn" style="max-width:280px;margin:10px auto 0" onclick="custCallWaiter()">🔔 Call Waiter</button>' +
+    '<div id="historySheet" class="sheet"><div class="sheet-inner">' +
+    '<h2 style="margin-top:0;color:var(--gold-soft)">Order Status</h2>' +
+    '<div id="historyList"></div>' +
+    '<button class="secondary" style="margin-top:8px" onclick="custCloseHistory()">Close</button>' +
+    '</div></div></div>';
+}
+
+// A customer's local order history for a table (what powers "My Orders" and the rating prompt)
+// only auto-clears after 2 hours. It intentionally does NOT clear the moment orders are billed —
+// that used to wipe the history (and the feedback/rating option) the instant a customer reopened
+// the page right after paying, before they'd had a chance to rate. Closing an order (see
+// custRequestBill) is now the deliberate, customer-initiated way to end a visit; billing alone
+// no longer silently resets things.
 function custCleanupSessionIfNeeded(tableId) {
   const historyIds = JSON.parse(localStorage.getItem('orderHistory_' + tableId) || '[]');
   if (historyIds.length === 0) return Promise.resolve();
   const sessionStart = parseInt(localStorage.getItem('sessionStart_' + tableId) || '0', 10);
   if (sessionStart && (Date.now() - sessionStart > 2 * 60 * 60 * 1000)) {
     custClearLocalSession(tableId);
-    return Promise.resolve();
   }
-  return Promise.all(historyIds.map(id => db.collection('orders').doc(id).get())).then(docs => {
-    const allDone = docs.every(d => !d.exists || ['billed', 'cancelled'].includes(d.data().status));
-    if (allDone) custClearLocalSession(tableId);
-  }).catch(() => {});
+  return Promise.resolve();
 }
 function custClearLocalSession(tableId) {
   localStorage.removeItem('orderHistory_' + tableId);
@@ -1034,11 +1050,15 @@ function custCallWaiter() {
 }
 
 function custRequestBill() {
+  if (!confirm('Close your order and request the bill? You won\u2019t be able to add more items after this — let us know if you want anything else first.')) return;
   db.collection('tables').doc(custTableId).set({
     billRequested: true,
-    billRequestedAt: firebase.firestore.FieldValue.serverTimestamp()
-  }, { merge: true }).then(() => toast('🧾 Bill requested — cashier notified'))
-    .catch(err => toast('Could not request the bill — please try again: ' + err.message));
+    billRequestedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    orderingClosed: true
+  }, { merge: true }).then(() => {
+    toast('🔒 Order closed — bill requested');
+    location.reload();
+  }).catch(err => toast('Could not request the bill — please try again: ' + err.message));
 }
 
 // ============================================================
@@ -1167,10 +1187,10 @@ function transferTable(fromTable, toTable) {
         status: 'occupied',
         assignedWaiter: fromData.assignedWaiter || null,
         lastOrderId: fromData.lastOrderId || null,
-        waiterCall: false, billRequested: false
+        waiterCall: false, billRequested: false, orderingClosed: false
       }, { merge: true });
       batch.set(db.collection('tables').doc(fromTable), {
-        status: 'available', assignedWaiter: null, waiterCall: false, billRequested: false
+        status: 'available', assignedWaiter: null, waiterCall: false, billRequested: false, orderingClosed: false
       }, { merge: true });
       batch.commit().then(() => {
         logActivity('transfer_table', fromTable + ' -> ' + toTable + ' (' + snap.size + ' order(s))');
@@ -1209,6 +1229,7 @@ function waiterRenderTables() {
             <span><strong>Table ${t.id.replace(/^T0*/,'')}</strong> ${t.assignedWaiter ? '· ' + t.assignedWaiter : ''}</span>
             <span class="badge ${t.status || 'available'}">${t.status || 'available'}</span>
           </div>
+          ${t.orderingClosed ? '<p class="small">🔒 Closed — awaiting bill</p>' : ''}
           <div class="row" style="gap:6px;margin-top:6px">
             <select id="wtstatus-${t.id}" style="margin-bottom:0">
               ${['available','occupied','reserved','cleaning'].map(s => `<option value="${s}" ${(t.status||'available')===s?'selected':''}>${s}</option>`).join('')}
@@ -1454,7 +1475,7 @@ function cashierConfirmPayment() {
     cashier: (session && session.name) || '',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
-  batch.update(db.collection('tables').doc(cashierPayingTable), { status: 'available', billRequested: false });
+  batch.update(db.collection('tables').doc(cashierPayingTable), { status: 'available', billRequested: false, orderingClosed: false });
   batch.commit().then(() => {
     logActivity('confirm_payment', cashierPayingTable + ' ₹' + total);
     closeSheet('paySheet');
@@ -1462,7 +1483,7 @@ function cashierConfirmPayment() {
       table: cashierPayingTable, items: allItems, subtotal, discount, total,
       paymentMethod: cashierSelectedMethod, customerMobile: mobile, orderNumbers
     });
-  });
+  }).catch(err => alert('Payment could not be confirmed — please try again: ' + err.message));
 }
 
 function cashierReprint(bill) {
@@ -2177,6 +2198,7 @@ function adminRenderTables() {
           <div class="row"><strong>Table ${t.id.replace(/^T0*/,'')}</strong>
             <button style="width:auto" class="danger" onclick="adminDeleteTable('${t.id}')">🗑</button>
           </div>
+          ${t.orderingClosed ? '<p class="small">🔒 Closed — awaiting bill</p>' : ''}
           <div class="row" style="gap:6px;margin-top:6px">
             <select id="tstatus-${t.id}" style="margin-bottom:0">
               ${['available','occupied','reserved','cleaning'].map(s => `<option value="${s}" ${t.status===s?'selected':''}>${s}</option>`).join('')}
