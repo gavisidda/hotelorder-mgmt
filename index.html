@@ -263,6 +263,9 @@
     <select id="itemCategory"></select>
     <input id="itemPrice" type="number" placeholder="Price (₹)">
     <input id="itemImage" placeholder="Image URL (optional)">
+    <p class="small">Or upload a photo directly</p>
+    <input type="file" id="itemImageFile" accept="image/*" onchange="adminUploadMenuImage(event)">
+    <p class="small" id="itemImageUploadStatus"></p>
     <textarea id="itemDesc" placeholder="Short description (optional)"></textarea>
     <label class="row"><span>Available</span><input type="checkbox" id="itemAvailable" style="width:auto" checked></label>
     <label class="row"><span>Ready to serve (no kitchen prep — tea, coffee, bottled drinks, etc.)</span><input type="checkbox" id="itemReadyToServe" style="width:auto"></label>
@@ -1651,6 +1654,7 @@ function adminRenderMenuAdmin() {
           <p class="small">Import menu items from a CSV file — matches existing items by name to update them, everything else is added new.</p>
           <input type="file" id="csvFileInput" accept=".csv" onchange="adminImportCSV(event)">
           <button class="secondary" onclick="adminDownloadCSVTemplate()">⬇️ Download CSV Template</button>
+          <button class="secondary" style="margin-top:8px" onclick="adminExportMenuCSV()">⬇️ Export Current Menu to CSV</button>
         </div>
         <button class="secondary" style="margin-bottom:12px" onclick="adminOpenCatSheet()">+ Manage Categories (${adminCategoriesCache.length})</button>
       ` + (items.length === 0 ? '<div class="empty-state">No menu items yet. Tap + to add one, or import a CSV above.</div>' :
@@ -1678,6 +1682,24 @@ function adminToggleMenuAvailability(id, available) {
 }
 
 // ---- CSV menu import ----
+function adminExportMenuCSV() {
+  Promise.all([db.collection('menu').get(), db.collection('categories').get()]).then(([menuSnap, catSnap]) => {
+    if (menuSnap.empty) { alert('No menu items to export yet.'); return; }
+    const catById = {};
+    catSnap.docs.forEach(d => catById[d.id] = d.data().name);
+    const rows = [['name','category','price','image','description','available','readyToServe','scheduleStart','scheduleEnd']];
+    menuSnap.docs.forEach(d => {
+      const i = d.data();
+      rows.push([
+        i.name || '', catById[i.category] || '', i.price || 0, i.image || '', i.description || '',
+        i.available ? 'TRUE' : 'FALSE', i.readyToServe ? 'TRUE' : 'FALSE',
+        i.scheduleStart || '', i.scheduleEnd || ''
+      ]);
+    });
+    adminDownloadCSV(rows, 'menu-export-' + new Date().toISOString().slice(0,10) + '.csv');
+  }).catch(err => alert('Could not export menu: ' + err.message));
+}
+
 function adminDownloadCSVTemplate() {
   const csv = 'name,category,price,image,description,available,readyToServe,scheduleStart,scheduleEnd\n' +
     'Masala Dosa,Breakfast,80,,Crispy rice crepe with spiced potato filling,TRUE,FALSE,,\n' +
@@ -1792,6 +1814,7 @@ function adminOpenMenuSheet() {
   document.getElementById('itemName').value = '';
   document.getElementById('itemPrice').value = '';
   document.getElementById('itemImage').value = '';
+  document.getElementById('itemImageUploadStatus').textContent = '';
   document.getElementById('itemDesc').value = '';
   document.getElementById('itemAvailable').checked = true;
   document.getElementById('itemReadyToServe').checked = false;
@@ -1804,6 +1827,22 @@ function adminOpenMenuSheet() {
   const sel = document.getElementById('itemCategory');
   sel.innerHTML = adminCategoriesCache.map(c => `<option value="${c.id}">${c.name}</option>`).join('') || '<option value="">Add a category first</option>';
   document.getElementById('menuSheet').style.display = 'block';
+}
+
+function adminUploadMenuImage(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('itemImageUploadStatus');
+  statusEl.textContent = 'Uploading...';
+  const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+  const path = 'menu-images/' + Date.now() + '-' + safeName;
+  storage.ref().child(path).put(file).then(snapshot => snapshot.ref.getDownloadURL()).then(url => {
+    document.getElementById('itemImage').value = url;
+    statusEl.textContent = '✅ Photo uploaded';
+  }).catch(err => {
+    statusEl.textContent = '❌ Upload failed: ' + err.message;
+  });
+  event.target.value = '';
 }
 
 function adminEditMenuItem(item) {
@@ -2302,11 +2341,36 @@ function adminExportLogsCSV() {
   }).catch(err => alert('Could not export: ' + err.message));
 }
 
+let adminPerformancePeriod = sessionStorage.getItem('adminPerformancePeriod') || 'today';
+
+function adminPerformanceStartDate() {
+  const now = new Date();
+  if (adminPerformancePeriod === 'week') {
+    const d = new Date(now);
+    d.setDate(now.getDate() - now.getDay());
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  if (adminPerformancePeriod === 'month') {
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function adminSetPerformancePeriod(p) {
+  adminPerformancePeriod = p;
+  sessionStorage.setItem('adminPerformancePeriod', p);
+  adminRenderPerformance();
+}
+
 function adminRenderPerformance() {
-  const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
-  db.collection('bills').where('createdAt','>=',startOfDay).get().then(snap => {
+  const startDate = adminPerformanceStartDate();
+  const periodLabel = { today: "Today", week: "This Week", month: "This Month" }[adminPerformancePeriod];
+  db.collection('bills').where('createdAt','>=',startDate).get().then(snap => {
     if (adminMoreView !== 'performance') return;
     const bills = snap.docs.map(d => d.data());
+    const totalSales = bills.reduce((s, b) => s + b.total, 0);
     const byCashier = {};
     const itemCounts = {};
     bills.forEach(b => {
@@ -2314,14 +2378,24 @@ function adminRenderPerformance() {
       (b.items || []).forEach(i => { itemCounts[i.name] = (itemCounts[i.name] || 0) + i.qty; });
     });
     const topItems = Object.entries(itemCounts).sort((a,b) => b[1]-a[1]).slice(0,5);
+    const avgBill = bills.length ? Math.round(totalSales / bills.length) : 0;
     const el = document.getElementById('moreContent');
     el.innerHTML = `
-      <button class="secondary" style="margin-bottom:10px" onclick="adminExportSalesCSV()">⬇️ Export Today's Sales to CSV</button>
-      <div class="card"><p class="small">Sales by Cashier (Today)</p>
-        ${Object.entries(byCashier).map(([c,amt]) => `<div class="row small"><span>${c || 'Unknown'}</span><strong>₹${amt}</strong></div>`).join('') || '<p class="small">No sales yet today.</p>'}
+      <div class="filter-chips">
+        ${[['today','Today'],['week','This Week'],['month','This Month']].map(([v,l]) =>
+          `<button class="${adminPerformancePeriod===v?'active':''}" onclick="adminSetPerformancePeriod('${v}')">${l}</button>`).join('')}
       </div>
-      <div class="card"><p class="small">Top Selling Items (Today)</p>
-        ${topItems.map(([n,q]) => `<div class="row small"><span>${n}</span><strong>${q}</strong></div>`).join('') || '<p class="small">No sales yet today.</p>'}
+      <button class="secondary" style="margin:0 16px 10px" onclick="adminExportSalesCSV()">⬇️ Export ${periodLabel}'s Sales to CSV</button>
+      <div class="stat-row">
+        <div class="card"><p class="small">Total Sales</p><h2>₹${totalSales}</h2></div>
+        <div class="card"><p class="small">Bills</p><h2>${bills.length}</h2></div>
+        <div class="card"><p class="small">Avg Bill</p><h2>₹${avgBill}</h2></div>
+      </div>
+      <div class="card"><p class="small">Sales by Cashier (${periodLabel})</p>
+        ${Object.entries(byCashier).map(([c,amt]) => `<div class="row small"><span>${c || 'Unknown'}</span><strong>₹${amt}</strong></div>`).join('') || '<p class="small">No sales in this period.</p>'}
+      </div>
+      <div class="card"><p class="small">Top Selling Items (${periodLabel})</p>
+        ${topItems.map(([n,q]) => `<div class="row small"><span>${n}</span><strong>${q}</strong></div>`).join('') || '<p class="small">No sales in this period.</p>'}
       </div>`;
   }).catch(err => {
     if (adminMoreView !== 'performance') return;
@@ -2330,17 +2404,17 @@ function adminRenderPerformance() {
   });
 }
 function adminExportSalesCSV() {
-  const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
-  db.collection('bills').where('createdAt','>=',startOfDay).orderBy('createdAt').get().then(snap => {
-    if (snap.empty) { alert('No sales yet today to export.'); return; }
-    const rows = [['Time', 'Table', 'Order(s)', 'Items', 'Subtotal', 'Discount', 'Total', 'Payment Method', 'Cashier']];
+  const startDate = adminPerformanceStartDate();
+  db.collection('bills').where('createdAt','>=',startDate).orderBy('createdAt').get().then(snap => {
+    if (snap.empty) { alert('No sales in this period to export.'); return; }
+    const rows = [['Date/Time', 'Table', 'Order(s)', 'Items', 'Subtotal', 'Discount', 'Total', 'Payment Method', 'Cashier']];
     snap.docs.forEach(d => {
       const b = d.data();
-      const ts = b.createdAt ? new Date(b.createdAt.seconds * 1000).toLocaleTimeString() : '';
+      const ts = b.createdAt ? new Date(b.createdAt.seconds * 1000).toLocaleString() : '';
       const itemsText = (b.items || []).map(i => i.qty + 'x ' + i.name).join('; ');
       rows.push([ts, b.table.replace(/^T0*/,''), (b.orderNumbers || []).join('; '), itemsText, b.subtotal || b.total, b.discount || 0, b.total, b.paymentMethod || '', b.cashier || '']);
     });
-    adminDownloadCSV(rows, 'sales-' + new Date().toISOString().slice(0,10) + '.csv');
+    adminDownloadCSV(rows, 'sales-' + adminPerformancePeriod + '-' + new Date().toISOString().slice(0,10) + '.csv');
   }).catch(err => alert('Could not export: ' + err.message));
 }
 function adminDownloadCSV(rows, filename) {
