@@ -169,9 +169,23 @@
     <div class="sheet-inner">
       <h2 style="margin-top:0;color:var(--gold-soft)">Order Status</h2>
       <div id="historyList"></div>
-      <div class="grid-2" style="margin-top:10px">
+      <div id="closeRatingBox" style="display:none">
+        <p class="small" style="text-align:center">Before we close your order, how was your experience? (optional)</p>
+        <div class="star-row" id="closeStars">
+          <span class="star" data-n="1" onclick="custSetCloseStar(1)">★</span>
+          <span class="star" data-n="2" onclick="custSetCloseStar(2)">★</span>
+          <span class="star" data-n="3" onclick="custSetCloseStar(3)">★</span>
+          <span class="star" data-n="4" onclick="custSetCloseStar(4)">★</span>
+          <span class="star" data-n="5" onclick="custSetCloseStar(5)">★</span>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:10px" id="historyActionsRow">
         <button class="secondary" id="callWaiterBtn" onclick="custCallWaiter()">🔔 Call Waiter</button>
-        <button onclick="custRequestBill()">🔒 Close Order & Get Bill</button>
+        <button id="closeOrderBtn" disabled onclick="custPromptCloseOrder()">🔒 Close Order & Get Bill</button>
+      </div>
+      <div class="grid-2" style="margin-top:10px;display:none" id="closeConfirmRow">
+        <button class="secondary" onclick="custCancelCloseOrder()">Cancel</button>
+        <button onclick="custConfirmCloseOrder()">Confirm & Close</button>
       </div>
       <button class="secondary" style="margin-top:8px" onclick="custCloseHistory()">Close</button>
     </div>
@@ -719,8 +733,8 @@ function custShowOrderClosedScreen() {
 // only auto-clears after 2 hours. It intentionally does NOT clear the moment orders are billed —
 // that used to wipe the history (and the feedback/rating option) the instant a customer reopened
 // the page right after paying, before they'd had a chance to rate. Closing an order (see
-// custRequestBill) is now the deliberate, customer-initiated way to end a visit; billing alone
-// no longer silently resets things.
+// custConfirmCloseOrder) is now the deliberate, customer-initiated way to end a visit; billing
+// alone no longer silently resets things.
 function custCleanupSessionIfNeeded(tableId) {
   const historyIds = JSON.parse(localStorage.getItem('orderHistory_' + tableId) || '[]');
   if (historyIds.length === 0) return Promise.resolve();
@@ -740,9 +754,31 @@ function custStartOrdering() {
   custLoadCategories();
   custLoadMenu();
   custRenderCartBar();
+  custRefreshActiveOrderState();
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
+}
+
+// Whether this device currently has at least one order at this table that isn't
+// billed or cancelled yet — the "Close Order & Get Bill" button only ever works
+// when this is true, so a customer can't lock an empty table with nothing to bill.
+let custHasActiveOrder = false;
+function custRefreshActiveOrderState() {
+  const ids = JSON.parse(localStorage.getItem('orderHistory_' + custTableId) || '[]');
+  const btn = document.getElementById('closeOrderBtn');
+  if (ids.length === 0) {
+    custHasActiveOrder = false;
+    if (btn) btn.disabled = true;
+    return Promise.resolve();
+  }
+  return Promise.all(ids.map(id => db.collection('orders').doc(id).get())).then(docs => {
+    custHasActiveOrder = docs.some(d => d.exists && !['billed', 'cancelled'].includes(d.data().status));
+    if (btn) btn.disabled = !custHasActiveOrder;
+  }).catch(() => {
+    custHasActiveOrder = false;
+    if (btn) btn.disabled = true;
+  });
 }
 
 function custShowTableError(title, message) {
@@ -975,6 +1011,9 @@ function custPlaceOrder() {
     custSaveCart();
     document.getElementById('specialInstructions').value = '';
     custCloseCart();
+    custHasActiveOrder = true;
+    const closeBtn = document.getElementById('closeOrderBtn');
+    if (closeBtn) closeBtn.disabled = false;
     toast('✅ Order placed! Track it in "My Orders"');
   }).catch(err => toast('Failed to place order: ' + err.message));
 }
@@ -1008,6 +1047,13 @@ function custShowOrderHistory() {
       wrap.innerHTML = '<div class="empty-state">Could not load your orders: ' + err.message + '</div>';
     });
   }
+  const ratingBox = document.getElementById('closeRatingBox');
+  const actionsRow = document.getElementById('historyActionsRow');
+  const confirmRow = document.getElementById('closeConfirmRow');
+  if (ratingBox) ratingBox.style.display = 'none';
+  if (actionsRow) actionsRow.style.display = '';
+  if (confirmRow) confirmRow.style.display = 'none';
+  if (document.getElementById('closeOrderBtn')) custRefreshActiveOrderState();
   document.getElementById('historySheet').style.display = 'block';
 }
 function custCloseHistory() { document.getElementById('historySheet').style.display = 'none'; }
@@ -1049,16 +1095,67 @@ function custCallWaiter() {
   }).catch(err => toast('Could not reach staff — please try again: ' + err.message));
 }
 
-function custRequestBill() {
-  if (!confirm('Close your order and request the bill? You won\u2019t be able to add more items after this — let us know if you want anything else first.')) return;
-  db.collection('tables').doc(custTableId).set({
-    billRequested: true,
-    billRequestedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    orderingClosed: true
-  }, { merge: true }).then(() => {
-    toast('🔒 Order closed — bill requested');
-    location.reload();
-  }).catch(err => toast('Could not request the bill — please try again: ' + err.message));
+let custCloseStarValue = 0;
+function custSetCloseStar(n) {
+  custCloseStarValue = n;
+  document.querySelectorAll('#closeStars .star').forEach(s => {
+    s.classList.toggle('filled', parseInt(s.dataset.n) <= n);
+  });
+}
+
+function custPromptCloseOrder() {
+  const btn = document.getElementById('closeOrderBtn');
+  if (btn && btn.disabled) return;
+  // Re-check live before opening the confirm step — covers the case where staff already
+  // billed this table directly (without the customer using this button) since the page loaded.
+  custRefreshActiveOrderState().then(() => {
+    if (!custHasActiveOrder) {
+      toast('There\u2019s nothing active to close right now — please order first, or ask our staff.');
+      return;
+    }
+    custCloseStarValue = 0;
+    document.querySelectorAll('#closeStars .star').forEach(s => s.classList.remove('filled'));
+    document.getElementById('closeRatingBox').style.display = 'block';
+    document.getElementById('historyActionsRow').style.display = 'none';
+    document.getElementById('closeConfirmRow').style.display = 'grid';
+  });
+}
+
+function custCancelCloseOrder() {
+  document.getElementById('closeRatingBox').style.display = 'none';
+  document.getElementById('historyActionsRow').style.display = '';
+  document.getElementById('closeConfirmRow').style.display = 'none';
+}
+
+function custConfirmCloseOrder() {
+  // Final live re-check right before locking the table, so a stale "active order" state
+  // (from opening this screen a while ago) can never lock a table with nothing to bill.
+  custRefreshActiveOrderState().then(() => {
+    if (!custHasActiveOrder) {
+      toast('There\u2019s nothing active to close right now — please order first, or ask our staff.');
+      custCancelCloseOrder();
+      return;
+    }
+    const rating = custCloseStarValue;
+    const proceedToClose = () => {
+      db.collection('tables').doc(custTableId).set({
+        billRequested: true,
+        billRequestedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        orderingClosed: true
+      }, { merge: true }).then(() => {
+        toast('🔒 Order closed — bill requested');
+        location.reload();
+      }).catch(err => toast('Could not request the bill — please try again: ' + err.message));
+    };
+    if (rating > 0) {
+      db.collection('feedback').add({
+        table: custTableId, rating,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      }).then(proceedToClose).catch(proceedToClose);
+    } else {
+      proceedToClose();
+    }
+  });
 }
 
 // ============================================================
