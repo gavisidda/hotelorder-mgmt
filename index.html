@@ -776,21 +776,24 @@ function custStartOrdering() {
   }
 }
 
-// Whether this device currently has at least one order at this table that isn't
-// billed or cancelled yet — the "Close Order & Get Bill" button only ever works
-// when this is true, so a customer can't lock an empty table with nothing to bill.
+// Whether this table currently has at least one active (unbilled, uncancelled) order —
+// from ANY source, customer or waiter — for the current visit. The "Close Order & Get Bill"
+// button only ever works when this is true, so nobody can lock an empty table with nothing
+// to bill, and it correctly reflects orders a waiter may have taken on the customer's behalf.
 let custHasActiveOrder = false;
 function custRefreshActiveOrderState() {
-  const ids = JSON.parse(localStorage.getItem('orderHistory_' + custTableId) || '[]');
   const btn = document.getElementById('closeOrderBtn');
-  if (ids.length === 0) {
-    custHasActiveOrder = false;
-    if (btn) btn.disabled = true;
-    return Promise.resolve();
-  }
-  return Promise.all(ids.map(id => db.collection('orders').doc(id).get())).then(docs => {
-    custHasActiveOrder = docs.some(d => d.exists && !['billed', 'cancelled'].includes(d.data().status));
-    if (btn) btn.disabled = !custHasActiveOrder;
+  return db.collection('tables').doc(custTableId).get().then(tableDoc => {
+    const visitId = tableDoc.exists ? tableDoc.data().currentVisitId : null;
+    if (!visitId) {
+      custHasActiveOrder = false;
+      if (btn) btn.disabled = true;
+      return;
+    }
+    return db.collection('orders').where('table', '==', custTableId).where('visitId', '==', visitId).get().then(snap => {
+      custHasActiveOrder = snap.docs.some(d => !['billed', 'cancelled'].includes(d.data().status));
+      if (btn) btn.disabled = !custHasActiveOrder;
+    });
   }).catch(() => {
     custHasActiveOrder = false;
     if (btn) btn.disabled = true;
@@ -960,6 +963,22 @@ function generateOrderNumber() {
   return dd + mm + '-' + hh + mi;
 }
 
+// Every order placed at a table (whether from the customer's own phone or a waiter taking it on
+// their behalf) is tagged with the table's current "visit" ID, so "My Orders" and the close-order
+// check can show/consider ALL of a table's current orders together, regardless of who placed them
+// or which device is asking. A fresh visit ID is generated whenever the table was free
+// (status 'available' or no visit yet); otherwise the table's existing visit ID is reused so
+// multiple orders across the same sitting stay grouped.
+function getOrCreateVisitId(tableId) {
+  return db.collection('tables').doc(tableId).get().then(doc => {
+    const data = doc.exists ? doc.data() : {};
+    if (data.status === 'available' || !data.currentVisitId) {
+      return Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    }
+    return data.currentVisitId;
+  });
+}
+
 // Decrements stock for any tracked items in an order, and auto-hides an item once it hits 0.
 // Runs after the order is already placed and never blocks or fails the order itself —
 // stock tracking is a helpful extra, not a hard reservation system.
@@ -997,57 +1016,64 @@ function custPlaceOrder() {
   }
   if (mobile) localStorage.setItem('custMobile', mobile);
 
-  db.collection('orders').add({
-    table: custTableId,
-    orderNumber: generateOrderNumber(),
-    items,
-    notes,
-    customerMobile: mobile || null,
-    total,
-    noKitchen,
-    status: 'new',
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  }).then(ref => {
-    db.collection('tables').doc(custTableId).set({
-      status: 'occupied',
-      lastOrderId: ref.id,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+  getOrCreateVisitId(custTableId).then(visitId => {
+    db.collection('orders').add({
+      table: custTableId,
+      visitId,
+      orderNumber: generateOrderNumber(),
+      items,
+      notes,
+      customerMobile: mobile || null,
+      total,
+      noKitchen,
+      status: 'new',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).then(ref => {
+      db.collection('tables').doc(custTableId).set({
+        status: 'occupied',
+        currentVisitId: visitId,
+        lastOrderId: ref.id,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
 
-    custDecrementStock(items);
+      custDecrementStock(items);
 
-    let history = JSON.parse(localStorage.getItem('orderHistory_' + custTableId) || '[]');
-    if (history.length === 0) {
-      localStorage.setItem('sessionStart_' + custTableId, String(Date.now()));
-    }
-    history.push(ref.id);
-    localStorage.setItem('orderHistory_' + custTableId, JSON.stringify(history));
+      let history = JSON.parse(localStorage.getItem('orderHistory_' + custTableId) || '[]');
+      if (history.length === 0) {
+        localStorage.setItem('sessionStart_' + custTableId, String(Date.now()));
+      }
+      history.push(ref.id);
+      localStorage.setItem('orderHistory_' + custTableId, JSON.stringify(history));
 
-    custCart = {};
-    custSaveCart();
-    document.getElementById('specialInstructions').value = '';
-    custCloseCart();
-    custHasActiveOrder = true;
-    const closeBtn = document.getElementById('closeOrderBtn');
-    if (closeBtn) closeBtn.disabled = false;
-    toast('✅ Order placed! Track it in "My Orders"');
+      custCart = {};
+      custSaveCart();
+      document.getElementById('specialInstructions').value = '';
+      custCloseCart();
+      custHasActiveOrder = true;
+      const closeBtn = document.getElementById('closeOrderBtn');
+      if (closeBtn) closeBtn.disabled = false;
+      toast('✅ Order placed! Track it in "My Orders"');
+    }).catch(err => toast('Failed to place order: ' + err.message));
   }).catch(err => toast('Failed to place order: ' + err.message));
 }
 
 function custShowOrderHistory() {
-  const ids = JSON.parse(localStorage.getItem('orderHistory_' + custTableId) || '[]');
   const wrap = document.getElementById('historyList');
-  if (ids.length === 0) {
-    wrap.innerHTML = '<div class="empty-state">No orders yet from this device.</div>';
-  } else {
-    wrap.innerHTML = '<div class="spinner"></div>';
-    Promise.all(ids.map(id => db.collection('orders').doc(id).get())).then(docs => {
-      wrap.innerHTML = docs.filter(d => d.exists).reverse().map(d => {
+  wrap.innerHTML = '<div class="spinner"></div>';
+  db.collection('tables').doc(custTableId).get().then(tableDoc => {
+    const visitId = tableDoc.exists ? tableDoc.data().currentVisitId : null;
+    if (!visitId) {
+      wrap.innerHTML = '<div class="empty-state">No orders yet for this table.</div>';
+      return Promise.resolve();
+    }
+    return db.collection('orders').where('table', '==', custTableId).where('visitId', '==', visitId).get().then(snap => {
+      const docs = snap.docs.sort((a, b) => (a.data().createdAt?.seconds || 0) - (b.data().createdAt?.seconds || 0)).reverse();
+      wrap.innerHTML = docs.map(d => {
         const o = d.data();
         const canRate = (o.status === 'billed') && !localStorage.getItem('rated_' + d.id);
         const showEta = !o.noKitchen && ['new', 'preparing'].includes(o.status);
         return `<div class="card">
-          <p class="small">Order #${o.orderNumber || '—'}</p>
+          <p class="small">Order #${o.orderNumber || '—'}${o.placedBy === 'waiter' ? ' · 👤 Placed by waiter' + (o.waiterName ? ' (' + o.waiterName + ')' : '') : ''}</p>
           <ul style="padding-left:0;list-style:none">${renderItemsList({ id: d.id, items: o.items }, false)}</ul>
           <div class="row"><span class="small">₹${o.total}</span><span class="badge ${o.status}">${o.status}</span></div>
           ${showEta ? `<p class="small">⏱ Estimated ready in ~${custEstimatedPrepMinutes} mins</p>` : ''}
@@ -1059,10 +1085,10 @@ function custShowOrderHistory() {
           </div>` : ''}
         </div>`;
       }).join('') || '<div class="empty-state">No orders found.</div>';
-    }).catch(err => {
-      wrap.innerHTML = '<div class="empty-state">Could not load your orders: ' + err.message + '</div>';
     });
-  }
+  }).catch(err => {
+    wrap.innerHTML = '<div class="empty-state">Could not load your orders: ' + err.message + '</div>';
+  });
   const ratingBox = document.getElementById('closeRatingBox');
   const actionsRow = document.getElementById('historyActionsRow');
   const confirmRow = document.getElementById('closeConfirmRow');
@@ -1302,10 +1328,11 @@ function transferTable(fromTable, toTable) {
         status: 'occupied',
         assignedWaiter: fromData.assignedWaiter || null,
         lastOrderId: fromData.lastOrderId || null,
+        currentVisitId: fromData.currentVisitId || null,
         waiterCall: false, billRequested: false, orderingClosed: false
       }, { merge: true });
       batch.set(db.collection('tables').doc(fromTable), {
-        status: 'available', assignedWaiter: null, waiterCall: false, billRequested: false, orderingClosed: false
+        status: 'available', assignedWaiter: null, waiterCall: false, billRequested: false, orderingClosed: false, currentVisitId: null
       }, { merge: true });
       batch.commit().then(() => {
         logActivity('transfer_table', fromTable + ' -> ' + toTable + ' (' + snap.size + ' order(s))');
@@ -1530,32 +1557,37 @@ function waiterOrderPlaceOrder() {
   const mobile = document.getElementById('waiterOrderMobile').value.trim();
   if (mobile && !/^\d{10}$/.test(mobile)) { toast('Mobile number should be 10 digits, or leave it blank'); return; }
   const noKitchen = items.every(i => i.readyToServe);
+  const tableId = waiterOrderTableId;
 
-  db.collection('orders').add({
-    table: waiterOrderTableId,
-    orderNumber: generateOrderNumber(),
-    items,
-    notes,
-    customerMobile: mobile || null,
-    total,
-    noKitchen,
-    status: 'new',
-    placedBy: 'waiter',
-    waiterName: (session && session.name) || '',
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  }).then(ref => {
-    db.collection('tables').doc(waiterOrderTableId).set({
-      status: 'occupied',
-      lastOrderId: ref.id,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
-    custDecrementStock(items);
-    logActivity('waiter_take_order', 'Table ' + waiterOrderTableId.replace(/^T0*/,'') + ' — ₹' + total);
-    waiterOrderCart = {};
-    closeSheet('waiterCartSheet');
-    toast('✅ Order placed for Table ' + waiterOrderTableId.replace(/^T0*/,''));
-    waiterOrderRenderMenu();
-    waiterOrderRenderCartBar();
+  getOrCreateVisitId(tableId).then(visitId => {
+    db.collection('orders').add({
+      table: tableId,
+      visitId,
+      orderNumber: generateOrderNumber(),
+      items,
+      notes,
+      customerMobile: mobile || null,
+      total,
+      noKitchen,
+      status: 'new',
+      placedBy: 'waiter',
+      waiterName: (session && session.name) || '',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).then(ref => {
+      db.collection('tables').doc(tableId).set({
+        status: 'occupied',
+        currentVisitId: visitId,
+        lastOrderId: ref.id,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+      custDecrementStock(items);
+      logActivity('waiter_take_order', 'Table ' + tableId.replace(/^T0*/,'') + ' — ₹' + total);
+      waiterOrderCart = {};
+      closeSheet('waiterCartSheet');
+      toast('✅ Order placed for Table ' + tableId.replace(/^T0*/,''));
+      waiterOrderRenderMenu();
+      waiterOrderRenderCartBar();
+    }).catch(err => toast('Could not place that order: ' + err.message));
   }).catch(err => toast('Could not place that order: ' + err.message));
 }
 
@@ -1779,7 +1811,7 @@ function cashierConfirmPayment() {
     cashier: (session && session.name) || '',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
-  batch.update(db.collection('tables').doc(cashierPayingTable), { status: 'available', billRequested: false, orderingClosed: false });
+  batch.update(db.collection('tables').doc(cashierPayingTable), { status: 'available', billRequested: false, orderingClosed: false, currentVisitId: null });
   batch.commit().then(() => {
     logActivity('confirm_payment', cashierPayingTable + ' ₹' + total);
     closeSheet('paySheet');
