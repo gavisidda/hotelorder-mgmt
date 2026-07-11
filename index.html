@@ -200,6 +200,7 @@
   <div class="container" id="waiterContent"><div class="spinner"></div></div>
   <div class="bottom-nav">
     <a href="#" class="active" data-tab="orders" onclick="waiterSetTab('orders')"><span class="icon">🔔</span>Orders</a>
+    <a href="#" data-tab="take" onclick="waiterSetTab('take')"><span class="icon">📝</span>Take Order</a>
     <a href="#" data-tab="tables" onclick="waiterSetTab('tables')"><span class="icon">🍽️</span>Tables</a>
     <a href="#" data-tab="calls" onclick="waiterSetTab('calls')"><span class="icon">📣</span>Calls</a>
     <a href="#" data-tab="qr" onclick="waiterSetTab('qr')"><span class="icon">🔲</span>QR</a>
@@ -212,6 +213,21 @@
     <button class="secondary" style="width:auto" onclick="doLogout()">Logout</button>
   </div>
   <div class="board" id="kitchenBoard"></div>
+</div>
+
+<div class="sheet" id="waiterCartSheet">
+  <div class="sheet-inner">
+    <h2 style="margin-top:0;color:var(--gold-soft)">Order for Table <span id="waiterCartTable"></span></h2>
+    <div id="waiterCartItems"></div>
+    <textarea id="waiterOrderNotes" placeholder="Special instructions (e.g. less spicy, no onion)"></textarea>
+    <input id="waiterOrderMobile" type="tel" inputmode="numeric" maxlength="10" placeholder="Customer mobile number (optional)">
+    <div class="row" style="margin-bottom:14px">
+      <strong>Total</strong>
+      <strong id="waiterCartTotal" style="color:var(--gold-soft)">₹0</strong>
+    </div>
+    <button onclick="waiterOrderPlaceOrder()">Place Order</button>
+    <button class="secondary" style="margin-top:8px" onclick="closeSheet('waiterCartSheet')">Continue Browsing</button>
+  </div>
 </div>
 
 <div class="sheet" id="paySheet">
@@ -1181,6 +1197,7 @@ function waiterSetTab(tab) {
 
 function waiterRender() {
   if (waiterActiveTab === 'orders') waiterRenderOrders();
+  else if (waiterActiveTab === 'take') waiterRenderTakeOrder();
   else if (waiterActiveTab === 'tables') waiterRenderTables();
   else if (waiterActiveTab === 'calls') waiterRenderCalls();
   else if (waiterActiveTab === 'qr') waiterRenderQR();
@@ -1207,6 +1224,7 @@ function waiterRenderOrders() {
           <span class="badge ${o.status}">${statusLabel[o.status] || o.status}</span>
         </div>
         <p class="small">Order #${o.orderNumber || '—'}</p>
+        ${o.placedBy === 'waiter' ? `<span class="badge available">👤 Waiter order${o.waiterName ? ' — ' + o.waiterName : ''}</span>` : ''}
         ${o.noKitchen ? '<span class="badge available">No Kitchen — ready-to-serve items</span>' :
           (o.items.some(i => i.readyToServe) ? '<span class="badge available">Mixed order</span>' : '')}
         <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { showServe: true })}</ul>
@@ -1333,6 +1351,7 @@ function waiterRenderTables() {
             </select>
             <button style="width:auto" onclick="waiterSetTableStatus('${t.id}')">Save</button>
           </div>
+          ${(t.status === 'occupied' && !t.orderingClosed) ? `<button class="secondary" style="margin-top:6px" onclick="waiterCloseTableOrder('${t.id}')">🔒 Close &amp; Request Bill</button>` : ''}
         </div>`).join('');
     }).join('');
     wrap.innerHTML = `
@@ -1367,6 +1386,193 @@ function waiterRenderCalls() {
 }
 function waiterClearCall(tableId) {
   db.collection('tables').doc(tableId).update({ waiterCall: false });
+}
+
+// ---- Take Order (waiter orders on behalf of a customer, e.g. table-service restaurants) ----
+let waiterOrderMenuItems = [];
+let waiterOrderCategories = [];
+let waiterOrderActiveCategory = 'all';
+let waiterOrderCart = {};
+let waiterOrderTableId = null;
+
+function waiterRenderTakeOrder() {
+  Promise.all([
+    db.collection('tables').get(),
+    db.collection('categories').orderBy('order').get(),
+    db.collection('menu').where('available', '==', true).get()
+  ]).then(([tSnap, catSnap, menuSnap]) => {
+    if (waiterActiveTab !== 'take') return;
+    let tables = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    tables = tables.sort((a, b) => (parseInt(a.id.replace(/\D/g,'')) || 0) - (parseInt(b.id.replace(/\D/g,'')) || 0));
+    waiterOrderCategories = catSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    waiterOrderMenuItems = menuSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(isItemScheduledNow);
+    const wrap = document.getElementById('waiterContent');
+    if (tables.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No tables set up yet. Ask admin/cashier to add tables under More → Tables.</div>';
+      return;
+    }
+    if (!waiterOrderTableId || !tables.some(t => t.id === waiterOrderTableId)) {
+      waiterOrderTableId = tables[0].id;
+    }
+    wrap.innerHTML = `
+      <div class="card">
+        <p class="small">Taking an order for</p>
+        <select id="waiterOrderTableSelect" onchange="waiterOrderSetTable(this.value)">
+          ${tables.map(t => `<option value="${t.id}" ${t.id === waiterOrderTableId ? 'selected' : ''}>Table ${t.id.replace(/^T0*/,'')} (${t.status || 'available'})</option>`).join('')}
+        </select>
+      </div>
+      <div class="tabs" id="waiterOrderTabs"></div>
+      <div id="waiterOrderMenuList"></div>
+      <div class="cart-bar" id="waiterOrderCartBar" onclick="waiterOrderOpenCart()">
+        <span id="waiterOrderCartSummary">0 items</span>
+        <span>Review Order →</span>
+      </div>`;
+    waiterOrderCart = {};
+    waiterOrderActiveCategory = 'all';
+    waiterOrderRenderTabs();
+    waiterOrderRenderMenu();
+    waiterOrderRenderCartBar();
+  }).catch(err => {
+    if (waiterActiveTab !== 'take') return;
+    document.getElementById('waiterContent').innerHTML = '<div class="empty-state">Could not load the menu: ' + err.message + '</div>';
+  });
+}
+
+function waiterOrderSetTable(tableId) {
+  waiterOrderTableId = tableId;
+  waiterOrderCart = {};
+  waiterOrderRenderCartBar();
+}
+
+function waiterOrderRenderTabs() {
+  const wrap = document.getElementById('waiterOrderTabs');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  const allBtn = document.createElement('button');
+  allBtn.textContent = 'All';
+  allBtn.className = waiterOrderActiveCategory === 'all' ? 'active' : '';
+  allBtn.onclick = () => { waiterOrderActiveCategory = 'all'; waiterOrderRenderTabs(); waiterOrderRenderMenu(); };
+  wrap.appendChild(allBtn);
+  waiterOrderCategories.forEach(cat => {
+    const b = document.createElement('button');
+    b.textContent = cat.name;
+    b.className = waiterOrderActiveCategory === cat.id ? 'active' : '';
+    b.onclick = () => { waiterOrderActiveCategory = cat.id; waiterOrderRenderTabs(); waiterOrderRenderMenu(); };
+    wrap.appendChild(b);
+  });
+}
+
+function waiterOrderRenderMenu() {
+  const list = waiterOrderActiveCategory === 'all' ? waiterOrderMenuItems : waiterOrderMenuItems.filter(i => i.category === waiterOrderActiveCategory);
+  const wrap = document.getElementById('waiterOrderMenuList');
+  if (!wrap) return;
+  if (list.length === 0) {
+    wrap.innerHTML = '<div class="empty-state">No items available right now.</div>';
+    return;
+  }
+  wrap.innerHTML = list.map(item => {
+    const qty = waiterOrderCart[item.id] ? waiterOrderCart[item.id].qty : 0;
+    return `
+    <div class="card item-card">
+      <div class="item-info">
+        <p class="item-name">${item.name}</p>
+        <p class="item-price">₹${item.price}</p>
+      </div>
+      <div class="qty-ctrl">
+        ${qty > 0 ? `<button onclick="waiterOrderChangeQty('${item.id}',-1)">−</button><span>${qty}</span>` : ''}
+        <button onclick="waiterOrderChangeQty('${item.id}',1)">+</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function waiterOrderChangeQty(itemId, delta) {
+  const item = waiterOrderMenuItems.find(i => i.id === itemId);
+  if (!waiterOrderCart[itemId]) waiterOrderCart[itemId] = { name: item.name, price: item.price, qty: 0, readyToServe: !!item.readyToServe };
+  waiterOrderCart[itemId].qty += delta;
+  if (waiterOrderCart[itemId].qty <= 0) delete waiterOrderCart[itemId];
+  waiterOrderRenderMenu();
+  waiterOrderRenderCartBar();
+}
+
+function waiterOrderRenderCartBar() {
+  const bar = document.getElementById('waiterOrderCartBar');
+  if (!bar) return;
+  const count = Object.values(waiterOrderCart).reduce((s, c) => s + c.qty, 0);
+  if (count > 0) {
+    bar.style.display = 'flex';
+    document.getElementById('waiterOrderCartSummary').textContent = count + ' item' + (count > 1 ? 's' : '') + ' added';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function waiterOrderOpenCart() {
+  const entries = Object.entries(waiterOrderCart);
+  if (entries.length === 0) { toast('Add at least one item first'); return; }
+  document.getElementById('waiterCartTable').textContent = waiterOrderTableId.replace(/^T0*/, '');
+  document.getElementById('waiterCartItems').innerHTML = entries.map(([id, c]) => `
+    <div class="cart-row"><span>${c.name} × ${c.qty}</span><span>₹${c.price * c.qty}</span></div>`).join('');
+  const total = entries.reduce((s, [, c]) => s + c.price * c.qty, 0);
+  document.getElementById('waiterCartTotal').textContent = '₹' + total;
+  document.getElementById('waiterOrderNotes').value = '';
+  document.getElementById('waiterOrderMobile').value = '';
+  document.getElementById('waiterCartSheet').style.display = 'block';
+}
+
+function waiterOrderPlaceOrder() {
+  const entries = Object.entries(waiterOrderCart);
+  if (entries.length === 0) return;
+  const session = getStaffSession();
+  const items = entries.map(([id, c]) => ({ itemId: id, name: c.name, price: c.price, qty: c.qty, readyToServe: !!c.readyToServe, served: false }));
+  const total = items.reduce((s, i) => s + i.price * i.qty, 0);
+  const notes = document.getElementById('waiterOrderNotes').value.trim();
+  const mobile = document.getElementById('waiterOrderMobile').value.trim();
+  if (mobile && !/^\d{10}$/.test(mobile)) { toast('Mobile number should be 10 digits, or leave it blank'); return; }
+  const noKitchen = items.every(i => i.readyToServe);
+
+  db.collection('orders').add({
+    table: waiterOrderTableId,
+    orderNumber: generateOrderNumber(),
+    items,
+    notes,
+    customerMobile: mobile || null,
+    total,
+    noKitchen,
+    status: 'new',
+    placedBy: 'waiter',
+    waiterName: (session && session.name) || '',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(ref => {
+    db.collection('tables').doc(waiterOrderTableId).set({
+      status: 'occupied',
+      lastOrderId: ref.id,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    custDecrementStock(items);
+    logActivity('waiter_take_order', 'Table ' + waiterOrderTableId.replace(/^T0*/,'') + ' — ₹' + total);
+    waiterOrderCart = {};
+    closeSheet('waiterCartSheet');
+    toast('✅ Order placed for Table ' + waiterOrderTableId.replace(/^T0*/,''));
+    waiterOrderRenderMenu();
+    waiterOrderRenderCartBar();
+  }).catch(err => toast('Could not place that order: ' + err.message));
+}
+
+// ---- Waiter can close a table's order and request the bill directly ----
+function waiterCloseTableOrder(tableId) {
+  db.collection('orders').where('table', '==', tableId).where('status', 'in', ['new', 'preparing', 'ready', 'served']).get().then(snap => {
+    if (snap.empty) { toast('No active orders for Table ' + tableId.replace(/^T0*/,'') + ' to close.'); return; }
+    if (!confirm('Close ordering for Table ' + tableId.replace(/^T0*/,'') + ' and request the bill?')) return;
+    db.collection('tables').doc(tableId).set({
+      billRequested: true,
+      billRequestedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      orderingClosed: true
+    }, { merge: true }).then(() => {
+      logActivity('close_table_order', tableId);
+      toast('Table ' + tableId.replace(/^T0*/,'') + ' closed — bill requested');
+    }).catch(err => toast('Could not close that table: ' + err.message));
+  }).catch(err => toast('Could not check that table: ' + err.message));
 }
 
 function waiterRenderQR() {
@@ -1460,6 +1666,7 @@ function kitchenListenOrders() {
       <div class="card kcard ${o.status}${overdue}" data-created="${o.createdAt?.seconds || ''}">
         <h2>Table ${o.table.replace(/^T0*/,'')}</h2>
         <p class="small">Order #${o.orderNumber || '—'}</p>
+        ${o.placedBy === 'waiter' ? '<span class="badge available">👤 Waiter order</span>' : ''}
         <span class="badge ${o.status}">${o.status === 'new' ? 'New' : 'Preparing'}</span>
         <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { onlyKitchen: true })}</ul>
         ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
@@ -1739,6 +1946,7 @@ function adminRenderOrders() {
       <div class="card">
         <div class="row"><strong>Table ${o.table.replace(/^T0*/,'')}</strong><span class="badge ${o.status}">${o.status}</span></div>
         <p class="small">Order #${o.orderNumber || '—'}</p>
+        ${o.placedBy === 'waiter' ? `<span class="badge available">👤 Waiter order${o.waiterName ? ' — ' + o.waiterName : ''}</span>` : ''}
         ${o.noKitchen ? '<span class="badge available">No Kitchen</span>' : ''}
         <ul style="padding-left:0;list-style:none">${renderItemsList(o, false)}</ul>
         <div class="row small">
@@ -2150,34 +2358,60 @@ function adminRenderBilling() {
 }
 function adminSetBillingView(v) { adminBillingView = v; sessionStorage.setItem('adminBillingView', v); adminRenderBilling(); }
 
+let pendingBillingOrders = {};
+let pendingBillingClosedTables = new Set();
+let pendingBillingOrdersLoaded = false;
+let pendingBillingTablesLoaded = false;
+
+function pendingBillingRerender() {
+  if (adminActiveTab !== 'billing' || adminBillingView !== 'pending') return;
+  if (!pendingBillingOrdersLoaded || !pendingBillingTablesLoaded) return;
+  const el = document.getElementById('billingContent');
+  if (!el) return;
+  const readyTableIds = Object.keys(pendingBillingOrders).filter(t => pendingBillingClosedTables.has(t));
+  if (readyTableIds.length === 0) {
+    el.innerHTML = '<div class="empty-state">No bills ready yet — waiting for an order to be closed (by the customer\u2019s "Close Order & Get Bill," or by a waiter from the Tables tab).</div>';
+    return;
+  }
+  el.innerHTML = readyTableIds.map(t => {
+    const orders = pendingBillingOrders[t];
+    const total = orders.reduce((s, o) => s + o.total, 0);
+    return `<div class="card">
+      <div class="row"><strong>Table ${t.replace(/^T0*/,'')}</strong><span class="badge served">${orders.length} order(s)</span></div>
+      <p class="small">Order(s): ${orders.map(o => o.orderNumber || '—').join(', ')}</p>
+      <p class="small">₹${total} total</p>
+      <button onclick='cashierOpenPay(${JSON.stringify(t)}, ${JSON.stringify(orders).replace(/'/g, "&apos;")})'>Generate Bill</button>
+    </div>`;
+  }).join('');
+}
+
 function adminBillingRenderPending() {
+  pendingBillingOrdersLoaded = false;
+  pendingBillingTablesLoaded = false;
+  const el = document.getElementById('billingContent');
+  if (el) el.innerHTML = '<div class="spinner"></div>';
+
   db.collection('orders').where('status', '==', 'served').onSnapshot(snap => {
-    if (adminActiveTab !== 'billing' || adminBillingView !== 'pending') return;
     const byTable = {};
     snap.docs.forEach(d => {
       const o = { id: d.id, ...d.data() };
       if (!byTable[o.table]) byTable[o.table] = [];
       byTable[o.table].push(o);
     });
-    const el = document.getElementById('billingContent');
-    if (!el) return;
-    const tables = Object.keys(byTable);
-    if (tables.length === 0) { el.innerHTML = '<div class="empty-state">No bills pending 🎉</div>'; return; }
-    el.innerHTML = tables.map(t => {
-      const orders = byTable[t];
-      const total = orders.reduce((s, o) => s + o.total, 0);
-      return `<div class="card">
-        <div class="row"><strong>Table ${t.replace(/^T0*/,'')}</strong><span class="badge served">${orders.length} order(s)</span></div>
-        <p class="small">Order(s): ${orders.map(o => o.orderNumber || '—').join(', ')}</p>
-        <p class="small">₹${total} total</p>
-        <button onclick='cashierOpenPay(${JSON.stringify(t)}, ${JSON.stringify(orders).replace(/'/g, "&apos;")})'>Generate Bill</button>
-      </div>`;
-    }).join('');
+    pendingBillingOrders = byTable;
+    pendingBillingOrdersLoaded = true;
+    pendingBillingRerender();
   }, err => {
     if (adminActiveTab !== 'billing' || adminBillingView !== 'pending') return;
-    const el = document.getElementById('billingContent');
-    if (el) el.innerHTML = '<div class="empty-state">Could not load pending bills: ' + err.message + '</div>';
+    const el2 = document.getElementById('billingContent');
+    if (el2) el2.innerHTML = '<div class="empty-state">Could not load pending bills: ' + err.message + '</div>';
   });
+
+  db.collection('tables').where('billRequested', '==', true).onSnapshot(snap => {
+    pendingBillingClosedTables = new Set(snap.docs.map(d => d.id));
+    pendingBillingTablesLoaded = true;
+    pendingBillingRerender();
+  }, err => console.warn('Table listener error:', err.message));
 }
 function adminBillingRenderReport() {
   const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
