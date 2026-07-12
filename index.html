@@ -443,12 +443,17 @@ function cancelOrderItem(orderId, itemIndex) {
     items[itemIndex].cancelled = true;
     items[itemIndex].cancelReason = reason;
     const newTotal = items.reduce((s, i) => s + (i.cancelled ? 0 : i.price * i.qty), 0);
-    db.collection('orders').doc(orderId).update({ items, total: newTotal }).then(() => {
+    const newStatus = computeOrderStatus(items);
+    db.collection('orders').doc(orderId).update({ items, total: newTotal, status: newStatus }).then(() => {
       logActivity('cancel_item', o.table + ' - ' + items[itemIndex].name + ': ' + reason);
     }).catch(err => alert('Could not cancel that item: ' + err.message));
   }).catch(err => alert('Could not load that order: ' + err.message));
 }
 
+// Each item carries its own kitchenStatus ('new' → 'preparing' → 'ready' → 'served'), since a
+// single table order can be appended to over time — some items may already be served while a
+// freshly-added item is still 'new'. opts.forKitchen shows kitchen's Start/Ready actions;
+// opts.forWaiter shows the Serve action once an item is ready.
 function renderItemsList(order, editable, opts) {
   opts = opts || {};
   return order.items.map((i, idx) => {
@@ -457,17 +462,31 @@ function renderItemsList(order, editable, opts) {
       return `<li class="cancelled-item"><span>${i.qty} × ${i.name} <span class="small">(cancelled: ${i.cancelReason})</span></span></li>`;
     }
     const tag = i.readyToServe ? ' <span class="small">(ready-to-serve)</span>' : '';
-    if (i.readyToServe && i.served) {
-      return `<li><span>${i.qty} × ${i.name}${tag} · ✅ served</span></li>`;
-    }
+    const status = i.kitchenStatus || 'new';
+    let statusLabel = '';
     let actions = '';
-    if (opts.showServe && i.readyToServe) {
+    if (status === 'served') {
+      statusLabel = ' · ✅ served';
+    } else if (opts.forKitchen && status === 'new') {
+      statusLabel = ' · <span class="small">new</span>';
+      actions += `<button class="mini-x" onclick="kitchenStartPreparingItem('${order.id}',${idx})">Start</button>`;
+    } else if (opts.forKitchen && status === 'preparing') {
+      statusLabel = ' · <span class="small">preparing</span>';
+      actions += `<button class="mini-x" onclick="kitchenMarkReadyItem('${order.id}',${idx})">Ready</button>`;
+    } else if (opts.forWaiter && status === 'ready') {
+      statusLabel = ' · <span class="small">ready to serve</span>';
       actions += `<button class="mini-x" style="background:var(--gold);color:#1a1408" onclick="waiterServeItem('${order.id}',${idx})">Serve</button>`;
+    } else if (opts.forWaiter && status === 'new') {
+      statusLabel = ' · <span class="small">waiting for kitchen</span>';
+    } else if (opts.forWaiter && status === 'preparing') {
+      statusLabel = ' · <span class="small">being prepared</span>';
+    } else if (!opts.forKitchen && !opts.forWaiter) {
+      statusLabel = ' · <span class="small">' + status + '</span>';
     }
     if (editable) {
       actions += `<button class="danger mini-x" onclick="cancelOrderItem('${order.id}',${idx})">✕</button>`;
     }
-    return `<li><span>${i.qty} × ${i.name}${tag}</span><span style="display:flex;gap:4px">${actions}</span></li>`;
+    return `<li><span>${i.qty} × ${i.name}${tag}${statusLabel}</span><span style="display:flex;gap:4px">${actions}</span></li>`;
   }).join('');
 }
 
@@ -584,7 +603,7 @@ function waiterListenReady() {
     rows.innerHTML = activeReadyOrders.map(o => `
       <div class="call-row">
         <span>🍽️ Table ${o.table.replace(/^T0*/,'')} is ready to serve</span>
-        <button onclick="waiterMarkServed('${o.id}')">Mark Served</button>
+        <button onclick="waiterMarkAllReadyServed('${o.id}')">Mark Served</button>
       </div>`).join('');
     if (!readyBeepInterval) {
       playBeep();
@@ -776,10 +795,11 @@ function custStartOrdering() {
   }
 }
 
-// Whether this table currently has at least one active (unbilled, uncancelled) order —
-// from ANY source, customer or waiter — for the current visit. The "Close Order & Get Bill"
-// button only ever works when this is true, so nobody can lock an empty table with nothing
-// to bill, and it correctly reflects orders a waiter may have taken on the customer's behalf.
+// Whether this table's current order is ready to close — meaning at least one order exists for
+// this visit AND every one of its (non-cancelled) items has actually been served. "Close Order &
+// Get Bill" only ever works once everything ordered has actually arrived; if anything is still
+// new/preparing/ready-but-not-served, closing stays blocked. Reflects orders from ANY source
+// (customer or a waiter taking the order on their behalf).
 let custHasActiveOrder = false;
 function custRefreshActiveOrderState() {
   const btn = document.getElementById('closeOrderBtn');
@@ -791,7 +811,8 @@ function custRefreshActiveOrderState() {
       return;
     }
     return db.collection('orders').where('table', '==', custTableId).where('visitId', '==', visitId).get().then(snap => {
-      custHasActiveOrder = snap.docs.some(d => !['billed', 'cancelled'].includes(d.data().status));
+      const activeOrders = snap.docs.filter(d => !['billed', 'cancelled'].includes(d.data().status));
+      custHasActiveOrder = activeOrders.length > 0 && activeOrders.every(d => d.data().status === 'served');
       if (btn) btn.disabled = !custHasActiveOrder;
     });
   }).catch(() => {
@@ -979,6 +1000,58 @@ function getOrCreateVisitId(tableId) {
   });
 }
 
+// The order's overall status is derived from its individual items' kitchenStatus, since a single
+// table order can have items at different stages (some already served, some just added and still
+// new). Priority: any 'new' item outranks 'preparing', which outranks 'ready' — the order is only
+// 'served' once every non-cancelled item is individually served.
+function computeOrderStatus(items) {
+  const active = items.filter(i => !i.cancelled);
+  if (active.length === 0) return 'served';
+  if (active.some(i => i.kitchenStatus === 'new')) return 'new';
+  if (active.some(i => i.kitchenStatus === 'preparing')) return 'preparing';
+  if (active.some(i => i.kitchenStatus === 'ready')) return 'ready';
+  return 'served';
+}
+
+// One table visit = one order. If the table already has an active (not billed/cancelled) order
+// for this visit, new items are appended to it (same order number) instead of creating a second
+// order — done inside a transaction so two devices adding items at the same moment can't clobber
+// each other. Otherwise a fresh order is created as before.
+function addItemsToOrCreateOrder(tableId, visitId, newItems, notes, mobile, placedBy, waiterName) {
+  const ordersRef = db.collection('orders');
+  return ordersRef.where('table', '==', tableId).where('visitId', '==', visitId).get().then(snap => {
+    const activeDoc = snap.docs.find(d => !['billed', 'cancelled'].includes(d.data().status));
+    if (activeDoc) {
+      const ref = ordersRef.doc(activeDoc.id);
+      return db.runTransaction(t => {
+        return t.get(ref).then(doc => {
+          const data = doc.data();
+          const mergedItems = (data.items || []).concat(newItems);
+          const newTotal = mergedItems.reduce((s, i) => s + (i.cancelled ? 0 : i.price * i.qty), 0);
+          const newStatus = computeOrderStatus(mergedItems);
+          const mergedNotes = notes ? (data.notes ? data.notes + ' | ' + notes : notes) : data.notes;
+          const update = {
+            items: mergedItems, total: newTotal, status: newStatus,
+            notes: mergedNotes || '', noKitchen: mergedItems.every(i => i.readyToServe),
+            customerMobile: data.customerMobile || mobile || null
+          };
+          t.update(ref, update);
+        });
+      }).then(() => ref.id);
+    }
+    const orderNumber = generateOrderNumber();
+    const noKitchen = newItems.every(i => i.readyToServe);
+    return ordersRef.add({
+      table: tableId, visitId, orderNumber, items: newItems, notes,
+      customerMobile: mobile || null,
+      total: newItems.reduce((s, i) => s + i.price * i.qty, 0),
+      noKitchen, status: computeOrderStatus(newItems),
+      placedBy: placedBy || 'customer', waiterName: waiterName || null,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).then(ref => ref.id);
+  });
+}
+
 // Decrements stock for any tracked items in an order, and auto-hides an item once it hits 0.
 // Runs after the order is already placed and never blocks or fails the order itself —
 // stock tracking is a helpful extra, not a hard reservation system.
@@ -1003,11 +1076,13 @@ function custDecrementStock(items) {
 function custPlaceOrder() {
   const entries = Object.entries(custCart);
   if (entries.length === 0) return;
-  const items = entries.map(([id, c]) => ({ itemId: id, name: c.name, price: c.price, qty: c.qty, readyToServe: !!c.readyToServe, served: false }));
-  const total = items.reduce((s, i) => s + i.price * i.qty, 0);
+  const items = entries.map(([id, c]) => ({
+    itemId: id, name: c.name, price: c.price, qty: c.qty,
+    readyToServe: !!c.readyToServe,
+    kitchenStatus: c.readyToServe ? 'ready' : 'new'
+  }));
   const notes = document.getElementById('specialInstructions').value.trim();
   const mobile = document.getElementById('custMobileInput').value.trim();
-  const noKitchen = items.every(i => i.readyToServe);
   if (custMobileMandatory) {
     if (!/^\d{10}$/.test(mobile)) { toast('A valid 10-digit mobile number is required to place an order'); return; }
   } else if (mobile && !/^\d{10}$/.test(mobile)) {
@@ -1017,22 +1092,11 @@ function custPlaceOrder() {
   if (mobile) localStorage.setItem('custMobile', mobile);
 
   getOrCreateVisitId(custTableId).then(visitId => {
-    db.collection('orders').add({
-      table: custTableId,
-      visitId,
-      orderNumber: generateOrderNumber(),
-      items,
-      notes,
-      customerMobile: mobile || null,
-      total,
-      noKitchen,
-      status: 'new',
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    }).then(ref => {
+    return addItemsToOrCreateOrder(custTableId, visitId, items, notes, mobile, 'customer', null).then(orderId => {
       db.collection('tables').doc(custTableId).set({
         status: 'occupied',
         currentVisitId: visitId,
-        lastOrderId: ref.id,
+        lastOrderId: orderId,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
 
@@ -1042,18 +1106,16 @@ function custPlaceOrder() {
       if (history.length === 0) {
         localStorage.setItem('sessionStart_' + custTableId, String(Date.now()));
       }
-      history.push(ref.id);
+      if (history.indexOf(orderId) === -1) history.push(orderId);
       localStorage.setItem('orderHistory_' + custTableId, JSON.stringify(history));
 
       custCart = {};
       custSaveCart();
       document.getElementById('specialInstructions').value = '';
       custCloseCart();
-      custHasActiveOrder = true;
-      const closeBtn = document.getElementById('closeOrderBtn');
-      if (closeBtn) closeBtn.disabled = false;
+      custRefreshActiveOrderState();
       toast('✅ Order placed! Track it in "My Orders"');
-    }).catch(err => toast('Failed to place order: ' + err.message));
+    });
   }).catch(err => toast('Failed to place order: ' + err.message));
 }
 
@@ -1148,11 +1210,11 @@ function custSetCloseStar(n) {
 function custPromptCloseOrder() {
   const btn = document.getElementById('closeOrderBtn');
   if (btn && btn.disabled) return;
-  // Re-check live before opening the confirm step — covers the case where staff already
-  // billed this table directly (without the customer using this button) since the page loaded.
+  // Re-check live before opening the confirm step — covers both staff already billing this
+  // table directly, and items that are still pending since the page loaded.
   custRefreshActiveOrderState().then(() => {
     if (!custHasActiveOrder) {
-      toast('There\u2019s nothing active to close right now — please order first, or ask our staff.');
+      toast('Please wait until everything you\u2019ve ordered has been served before closing.');
       return;
     }
     custCloseStarValue = 0;
@@ -1170,11 +1232,11 @@ function custCancelCloseOrder() {
 }
 
 function custConfirmCloseOrder() {
-  // Final live re-check right before locking the table, so a stale "active order" state
-  // (from opening this screen a while ago) can never lock a table with nothing to bill.
+  // Final live re-check right before locking the table — covers a late item still cooking or
+  // a stale state from opening this screen a while ago.
   custRefreshActiveOrderState().then(() => {
     if (!custHasActiveOrder) {
-      toast('There\u2019s nothing active to close right now — please order first, or ask our staff.');
+      toast('Please wait until everything you\u2019ve ordered has been served before closing.');
       custCancelCloseOrder();
       return;
     }
@@ -1233,16 +1295,13 @@ function waiterRenderOrders() {
   db.collection('orders').where('status', 'in', ['new', 'preparing', 'ready']).onSnapshot(snap => {
     if (waiterActiveTab !== 'orders') return;
     let orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    // Hide pure-kitchen orders that are still preparing (nothing for the waiter to do yet);
-    // keep mixed orders visible so the ready-to-serve items can still be delivered.
-    orders = orders.filter(o => o.status !== 'preparing' || o.items.some(i => i.readyToServe && !i.served && !i.cancelled));
     orders = orders.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
     const wrap = document.getElementById('waiterContent');
     if (orders.length === 0) {
-      wrap.innerHTML = '<div class="empty-state">No new or ready orders right now 🎉</div>';
+      wrap.innerHTML = '<div class="empty-state">No active orders right now 🎉</div>';
       return;
     }
-    const statusLabel = { new: 'New Order', preparing: 'Kitchen Preparing', ready: 'Ready to Serve' };
+    const statusLabel = { new: 'New', preparing: 'Kitchen Preparing', ready: 'Ready to Serve' };
     wrap.innerHTML = orders.map(o => `
       <div class="card">
         <div class="row">
@@ -1253,64 +1312,51 @@ function waiterRenderOrders() {
         ${o.placedBy === 'waiter' ? `<span class="badge available">👤 Waiter order${o.waiterName ? ' — ' + o.waiterName : ''}</span>` : ''}
         ${o.noKitchen ? '<span class="badge available">No Kitchen — ready-to-serve items</span>' :
           (o.items.some(i => i.readyToServe) ? '<span class="badge available">Mixed order</span>' : '')}
-        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { showServe: true })}</ul>
+        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { forWaiter: true })}</ul>
         ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
         ${o.customerMobile ? `<p class="small">📱 ${o.customerMobile}</p>` : ''}
-        <div class="row"><span class="small">₹${o.total}</span></div>
-        <div class="row" style="gap:6px">
-          ${o.status === 'new'
-            ? (o.noKitchen ? `<button onclick="waiterServeNow('${o.id}')">Serve Now</button>` : `<button onclick="waiterAcceptOrder('${o.id}')">Accept Order</button>`)
-            : (o.status === 'ready' ? `<button onclick="waiterMarkServed('${o.id}')">Mark Served</button>` : '<p class="small">👨‍🍳 Kitchen is preparing the rest of this order</p>')}
-          ${o.status === 'new' ? `<button style="width:auto" class="danger" onclick="waiterCancelOrder('${o.id}')">Cancel</button>` : ''}
+        <div class="row"><span class="small">₹${o.total}</span>
+          <button style="width:auto" class="danger" onclick="waiterCancelOrder('${o.id}')">Cancel Whole Order</button>
         </div>
       </div>`).join('');
   });
 }
 
+// Serve a single item once the kitchen has it ready (or immediately for ready-to-serve items).
+// Recomputes the order's overall status from all its items, since one order can now span
+// multiple items at different stages.
 function waiterServeItem(orderId, itemIndex) {
   db.collection('orders').doc(orderId).get().then(doc => {
     if (!doc.exists) { toast('That order could not be found.'); return; }
     const o = doc.data();
-    o.items[itemIndex].served = true;
-    db.collection('orders').doc(orderId).update({ items: o.items }).then(() => {
+    o.items[itemIndex].kitchenStatus = 'served';
+    const newStatus = computeOrderStatus(o.items);
+    const update = { items: o.items, status: newStatus };
+    if (newStatus === 'served' && !o.servedAt) update.servedAt = firebase.firestore.FieldValue.serverTimestamp();
+    db.collection('orders').doc(orderId).update(update).then(() => {
       logActivity('serve_item', o.table + ' - ' + o.items[itemIndex].name);
     }).catch(err => toast('Could not mark that item served: ' + err.message));
   }).catch(err => toast('Could not load that order: ' + err.message));
 }
 
-function waiterAcceptOrder(id) {
-  const session = getStaffSession();
-  db.collection('orders').doc(id).update({
-    status: 'preparing',
-    acceptedBy: (session && session.name) || '',
-    acceptedAt: firebase.firestore.FieldValue.serverTimestamp()
-  }).then(() => logActivity('accept_order', id))
-    .catch(err => toast('Could not accept that order: ' + err.message));
-}
-function waiterServeNow(id) {
-  const session = getStaffSession();
-  db.collection('orders').doc(id).get().then(doc => {
+// Convenience for the "order fully ready" notification banner — marks every ready item on
+// that order served in one tap, since by definition nothing on it is still cooking.
+function waiterMarkAllReadyServed(orderId) {
+  db.collection('orders').doc(orderId).get().then(doc => {
     if (!doc.exists) { toast('That order could not be found.'); return; }
-    const items = doc.data().items.map(i => i.cancelled ? i : { ...i, served: true });
-    db.collection('orders').doc(id).update({
-      status: 'served', items,
-      acceptedBy: (session && session.name) || '',
-      servedAt: firebase.firestore.FieldValue.serverTimestamp()
-    }).then(() => logActivity('serve_direct_no_kitchen', id))
-      .catch(err => toast('Could not serve that order: ' + err.message));
+    const o = doc.data();
+    o.items.forEach(i => { if (!i.cancelled && i.kitchenStatus === 'ready') i.kitchenStatus = 'served'; });
+    const newStatus = computeOrderStatus(o.items);
+    const update = { items: o.items, status: newStatus };
+    if (newStatus === 'served' && !o.servedAt) update.servedAt = firebase.firestore.FieldValue.serverTimestamp();
+    db.collection('orders').doc(orderId).update(update).then(() => {
+      logActivity('mark_served', orderId);
+    }).catch(err => toast('Could not mark that order served: ' + err.message));
   }).catch(err => toast('Could not load that order: ' + err.message));
 }
-function waiterMarkServed(id) {
-  db.collection('orders').doc(id).get().then(doc => {
-    if (!doc.exists) { toast('That order could not be found.'); return; }
-    const items = doc.data().items.map(i => i.cancelled ? i : { ...i, served: true });
-    db.collection('orders').doc(id).update({ status: 'served', items, servedAt: firebase.firestore.FieldValue.serverTimestamp() })
-      .then(() => logActivity('mark_served', id))
-      .catch(err => toast('Could not mark that order served: ' + err.message));
-  }).catch(err => toast('Could not load that order: ' + err.message));
-}
+
 function waiterCancelOrder(id) {
-  if (!confirm('Cancel this entire order?')) return;
+  if (!confirm('Cancel this entire order? Individual items can be cancelled instead using the ✕ next to each item.')) return;
   db.collection('orders').doc(id).update({ status: 'cancelled', cancelledAt: firebase.firestore.FieldValue.serverTimestamp() })
     .then(() => logActivity('cancel_order', id))
     .catch(err => toast('Could not cancel that order: ' + err.message));
@@ -1551,33 +1597,23 @@ function waiterOrderPlaceOrder() {
   const entries = Object.entries(waiterOrderCart);
   if (entries.length === 0) return;
   const session = getStaffSession();
-  const items = entries.map(([id, c]) => ({ itemId: id, name: c.name, price: c.price, qty: c.qty, readyToServe: !!c.readyToServe, served: false }));
+  const items = entries.map(([id, c]) => ({
+    itemId: id, name: c.name, price: c.price, qty: c.qty,
+    readyToServe: !!c.readyToServe,
+    kitchenStatus: c.readyToServe ? 'ready' : 'new'
+  }));
   const total = items.reduce((s, i) => s + i.price * i.qty, 0);
   const notes = document.getElementById('waiterOrderNotes').value.trim();
   const mobile = document.getElementById('waiterOrderMobile').value.trim();
   if (mobile && !/^\d{10}$/.test(mobile)) { toast('Mobile number should be 10 digits, or leave it blank'); return; }
-  const noKitchen = items.every(i => i.readyToServe);
   const tableId = waiterOrderTableId;
 
   getOrCreateVisitId(tableId).then(visitId => {
-    db.collection('orders').add({
-      table: tableId,
-      visitId,
-      orderNumber: generateOrderNumber(),
-      items,
-      notes,
-      customerMobile: mobile || null,
-      total,
-      noKitchen,
-      status: 'new',
-      placedBy: 'waiter',
-      waiterName: (session && session.name) || '',
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    }).then(ref => {
+    return addItemsToOrCreateOrder(tableId, visitId, items, notes, mobile, 'waiter', (session && session.name) || '').then(orderId => {
       db.collection('tables').doc(tableId).set({
         status: 'occupied',
         currentVisitId: visitId,
-        lastOrderId: ref.id,
+        lastOrderId: orderId,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
       custDecrementStock(items);
@@ -1587,7 +1623,7 @@ function waiterOrderPlaceOrder() {
       toast('✅ Order placed for Table ' + tableId.replace(/^T0*/,''));
       waiterOrderRenderMenu();
       waiterOrderRenderCartBar();
-    }).catch(err => toast('Could not place that order: ' + err.message));
+    });
   }).catch(err => toast('Could not place that order: ' + err.message));
 }
 
@@ -1595,6 +1631,11 @@ function waiterOrderPlaceOrder() {
 function waiterCloseTableOrder(tableId) {
   db.collection('orders').where('table', '==', tableId).where('status', 'in', ['new', 'preparing', 'ready', 'served']).get().then(snap => {
     if (snap.empty) { toast('No active orders for Table ' + tableId.replace(/^T0*/,'') + ' to close.'); return; }
+    const notFullyServed = snap.docs.some(d => d.data().status !== 'served');
+    if (notFullyServed) {
+      toast('Table ' + tableId.replace(/^T0*/,'') + ' still has items pending — serve everything before closing.');
+      return;
+    }
     if (!confirm('Close ordering for Table ' + tableId.replace(/^T0*/,'') + ' and request the bill?')) return;
     db.collection('tables').doc(tableId).set({
       billRequested: true,
@@ -1700,12 +1741,9 @@ function kitchenListenOrders() {
         <p class="small">Order #${o.orderNumber || '—'}</p>
         ${o.placedBy === 'waiter' ? '<span class="badge available">👤 Waiter order</span>' : ''}
         <span class="badge ${o.status}">${o.status === 'new' ? 'New' : 'Preparing'}</span>
-        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { onlyKitchen: true })}</ul>
+        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { onlyKitchen: true, forKitchen: true })}</ul>
         ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
         <p class="timer">${kitchenTimeAgo(o.createdAt)}</p>
-        ${o.status === 'new'
-          ? `<button onclick="kitchenStartPreparing('${o.id}')">Start Preparing</button>`
-          : `<button onclick="kitchenMarkReady('${o.id}')">Ready to Serve</button>`}
       </div>`;
     }).join('');
   });
@@ -1730,12 +1768,31 @@ function kitchenRefreshTimers() {
   });
 }
 
-function kitchenStartPreparing(id) {
-  db.collection('orders').doc(id).update({ status: 'preparing' });
+// Per-item kitchen actions — a single order can have items at different stages (some already
+// served from an earlier round, a freshly-added item still 'new'), so progress is tracked and
+// advanced per item rather than for the whole order at once.
+function kitchenStartPreparingItem(orderId, itemIndex) {
+  db.collection('orders').doc(orderId).get().then(doc => {
+    if (!doc.exists) { toast('That order could not be found.'); return; }
+    const o = doc.data();
+    o.items[itemIndex].kitchenStatus = 'preparing';
+    const newStatus = computeOrderStatus(o.items);
+    db.collection('orders').doc(orderId).update({ items: o.items, status: newStatus })
+      .catch(err => toast('Could not update that item: ' + err.message));
+  }).catch(err => toast('Could not load that order: ' + err.message));
 }
-function kitchenMarkReady(id) {
-  db.collection('orders').doc(id).update({ status: 'ready', readyAt: firebase.firestore.FieldValue.serverTimestamp() });
-  logActivity('mark_ready', id);
+function kitchenMarkReadyItem(orderId, itemIndex) {
+  db.collection('orders').doc(orderId).get().then(doc => {
+    if (!doc.exists) { toast('That order could not be found.'); return; }
+    const o = doc.data();
+    o.items[itemIndex].kitchenStatus = 'ready';
+    const newStatus = computeOrderStatus(o.items);
+    const update = { items: o.items, status: newStatus };
+    if (newStatus === 'ready' && !o.readyAt) update.readyAt = firebase.firestore.FieldValue.serverTimestamp();
+    db.collection('orders').doc(orderId).update(update).then(() => {
+      logActivity('mark_ready', orderId + ' - ' + o.items[itemIndex].name);
+    }).catch(err => toast('Could not update that item: ' + err.message));
+  }).catch(err => toast('Could not load that order: ' + err.message));
 }
 
 // ============================================================
