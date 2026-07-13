@@ -129,6 +129,7 @@ input, select, textarea {
 }
 
 .bottom-nav a.active { color: var(--gold-soft); }
+.bottom-nav a.nav-disabled { opacity: 0.35; pointer-events: none; }
 .bottom-nav .icon { font-size: 20px; display: block; margin-bottom: 2px; }
 
 .pin-pad {

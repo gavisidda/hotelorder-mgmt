@@ -29,6 +29,13 @@
   .sheet-inner { position: absolute; bottom: 0; left: 0; right: 0; max-height: 88vh; overflow-y: auto; background: var(--bg-card); border-radius: 20px 20px 0 0; padding: 20px; }
   .cart-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
   .board { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; padding: 16px; }
+  .board-columns { display: flex; gap: 10px; overflow-x: auto; padding: 12px; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; }
+  .board-col { flex: 0 0 86%; scroll-snap-align: start; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 10px; max-height: 74vh; overflow-y: auto; }
+  .board-col h3 { margin: 4px 6px 10px; color: var(--gold-soft); font-size: 15px; position: sticky; top: 0; background: var(--bg-card); padding: 4px 0; }
+  .board-col .card { margin-bottom: 10px; }
+  @media (min-width: 700px) {
+    .board-col { flex: 1 1 0; max-height: none; }
+  }
   .kcard { border-top: 4px solid var(--blue); }
   .kcard.preparing { border-top-color: var(--amber); }
   .kcard.overdue { border-top-color: var(--red); animation: overduePulse 1.6s infinite; }
@@ -133,7 +140,6 @@
       <h1 id="restaurantName">Restaurant</h1>
       <div class="sub" id="tableLabel">Table --</div>
     </div>
-    <button class="ghost" style="width:auto" onclick="custShowOrderHistory()">📋 My Orders</button>
   </div>
 
   <div class="container" style="padding-bottom:0">
@@ -141,13 +147,19 @@
   </div>
   <div class="tabs" id="categoryTabs"></div>
 
-  <div class="container" id="menuList">
+  <div class="container" id="menuList" style="padding-bottom:90px">
     <div class="spinner"></div>
   </div>
 
   <div class="cart-bar" id="cartBar" onclick="custOpenCart()">
     <span id="cartSummary">0 items</span>
     <span>View Cart →</span>
+  </div>
+
+  <div class="bottom-nav">
+    <a href="#" onclick="custShowOrderHistory()"><span class="icon">📋</span>My Orders</a>
+    <a href="#" id="callWaiterBtn" onclick="custCallWaiter()"><span class="icon">🔔</span><span id="callWaiterLabel">Call Waiter</span></a>
+    <a href="#" id="closeOrderBtn" onclick="custOpenCloseOrderSheet()"><span class="icon">🔒</span>Close Order &amp; Get Bill</a>
   </div>
 
   <div class="sheet" id="cartSheet">
@@ -169,25 +181,25 @@
     <div class="sheet-inner">
       <h2 style="margin-top:0;color:var(--gold-soft)">Order Status</h2>
       <div id="historyList"></div>
-      <div id="closeRatingBox" style="display:none">
-        <p class="small" style="text-align:center">Before we close your order, how was your experience? (optional)</p>
-        <div class="star-row" id="closeStars">
-          <span class="star" data-n="1" onclick="custSetCloseStar(1)">★</span>
-          <span class="star" data-n="2" onclick="custSetCloseStar(2)">★</span>
-          <span class="star" data-n="3" onclick="custSetCloseStar(3)">★</span>
-          <span class="star" data-n="4" onclick="custSetCloseStar(4)">★</span>
-          <span class="star" data-n="5" onclick="custSetCloseStar(5)">★</span>
-        </div>
+      <button class="secondary" style="margin-top:8px" onclick="custCloseHistory()">Close</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="closeOrderSheet">
+    <div class="sheet-inner">
+      <h2 style="margin-top:0;color:var(--gold-soft)">Close Order &amp; Get Bill</h2>
+      <p class="small" style="text-align:center">Before we close your order, how was your experience? (optional)</p>
+      <div class="star-row" id="closeStars">
+        <span class="star" data-n="1" onclick="custSetCloseStar(1)">★</span>
+        <span class="star" data-n="2" onclick="custSetCloseStar(2)">★</span>
+        <span class="star" data-n="3" onclick="custSetCloseStar(3)">★</span>
+        <span class="star" data-n="4" onclick="custSetCloseStar(4)">★</span>
+        <span class="star" data-n="5" onclick="custSetCloseStar(5)">★</span>
       </div>
-      <div class="grid-2" style="margin-top:10px" id="historyActionsRow">
-        <button class="secondary" id="callWaiterBtn" onclick="custCallWaiter()">🔔 Call Waiter</button>
-        <button id="closeOrderBtn" disabled onclick="custPromptCloseOrder()">🔒 Close Order & Get Bill</button>
-      </div>
-      <div class="grid-2" style="margin-top:10px;display:none" id="closeConfirmRow">
-        <button class="secondary" onclick="custCancelCloseOrder()">Cancel</button>
+      <div class="grid-2" style="margin-top:10px">
+        <button class="secondary" onclick="closeSheet('closeOrderSheet')">Cancel</button>
         <button onclick="custConfirmCloseOrder()">Confirm & Close</button>
       </div>
-      <button class="secondary" style="margin-top:8px" onclick="custCloseHistory()">Close</button>
     </div>
   </div>
 </div>
@@ -807,17 +819,17 @@ function custRefreshActiveOrderState() {
     const visitId = tableDoc.exists ? tableDoc.data().currentVisitId : null;
     if (!visitId) {
       custHasActiveOrder = false;
-      if (btn) btn.disabled = true;
+      if (btn) btn.classList.add('nav-disabled');
       return;
     }
     return db.collection('orders').where('table', '==', custTableId).where('visitId', '==', visitId).get().then(snap => {
       const activeOrders = snap.docs.filter(d => !['billed', 'cancelled'].includes(d.data().status));
       custHasActiveOrder = activeOrders.length > 0 && activeOrders.every(d => d.data().status === 'served');
-      if (btn) btn.disabled = !custHasActiveOrder;
+      if (btn) btn.classList.toggle('nav-disabled', !custHasActiveOrder);
     });
   }).catch(() => {
     custHasActiveOrder = false;
-    if (btn) btn.disabled = true;
+    if (btn) btn.classList.add('nav-disabled');
   });
 }
 
@@ -1151,13 +1163,7 @@ function custShowOrderHistory() {
   }).catch(err => {
     wrap.innerHTML = '<div class="empty-state">Could not load your orders: ' + err.message + '</div>';
   });
-  const ratingBox = document.getElementById('closeRatingBox');
-  const actionsRow = document.getElementById('historyActionsRow');
-  const confirmRow = document.getElementById('closeConfirmRow');
-  if (ratingBox) ratingBox.style.display = 'none';
-  if (actionsRow) actionsRow.style.display = '';
-  if (confirmRow) confirmRow.style.display = 'none';
-  if (document.getElementById('closeOrderBtn')) custRefreshActiveOrderState();
+  custRefreshActiveOrderState();
   document.getElementById('historySheet').style.display = 'block';
 }
 function custCloseHistory() { document.getElementById('historySheet').style.display = 'none'; }
@@ -1184,17 +1190,21 @@ function custSubmitFeedback(orderId, table) {
 
 function custCallWaiter() {
   const btn = document.getElementById('callWaiterBtn');
-  if (btn && btn.disabled) return;
+  if (btn && btn.classList.contains('nav-disabled')) return;
   db.collection('tables').doc(custTableId).set({
     waiterCall: true,
     waiterCallAt: firebase.firestore.FieldValue.serverTimestamp()
   }, { merge: true }).then(() => {
     toast('🔔 Waiter has been notified');
     if (btn) {
-      btn.disabled = true;
-      const original = btn.textContent;
-      btn.textContent = '✓ Waiter Notified';
-      setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 60000);
+      btn.classList.add('nav-disabled');
+      const label = document.getElementById('callWaiterLabel');
+      const original = label ? label.textContent : '';
+      if (label) label.textContent = 'Notified ✓';
+      setTimeout(() => {
+        btn.classList.remove('nav-disabled');
+        if (label) label.textContent = original;
+      }, 60000);
     }
   }).catch(err => toast('Could not reach staff — please try again: ' + err.message));
 }
@@ -1207,11 +1217,11 @@ function custSetCloseStar(n) {
   });
 }
 
-function custPromptCloseOrder() {
+function custOpenCloseOrderSheet() {
   const btn = document.getElementById('closeOrderBtn');
-  if (btn && btn.disabled) return;
-  // Re-check live before opening the confirm step — covers both staff already billing this
-  // table directly, and items that are still pending since the page loaded.
+  if (btn && btn.classList.contains('nav-disabled')) return;
+  // Re-check live before opening — covers both staff already billing this table directly,
+  // and items that are still pending since the page loaded.
   custRefreshActiveOrderState().then(() => {
     if (!custHasActiveOrder) {
       toast('Please wait until everything you\u2019ve ordered has been served before closing.');
@@ -1219,16 +1229,8 @@ function custPromptCloseOrder() {
     }
     custCloseStarValue = 0;
     document.querySelectorAll('#closeStars .star').forEach(s => s.classList.remove('filled'));
-    document.getElementById('closeRatingBox').style.display = 'block';
-    document.getElementById('historyActionsRow').style.display = 'none';
-    document.getElementById('closeConfirmRow').style.display = 'grid';
+    document.getElementById('closeOrderSheet').style.display = 'block';
   });
-}
-
-function custCancelCloseOrder() {
-  document.getElementById('closeRatingBox').style.display = 'none';
-  document.getElementById('historyActionsRow').style.display = '';
-  document.getElementById('closeConfirmRow').style.display = 'none';
 }
 
 function custConfirmCloseOrder() {
@@ -1237,7 +1239,7 @@ function custConfirmCloseOrder() {
   custRefreshActiveOrderState().then(() => {
     if (!custHasActiveOrder) {
       toast('Please wait until everything you\u2019ve ordered has been served before closing.');
-      custCancelCloseOrder();
+      closeSheet('closeOrderSheet');
       return;
     }
     const rating = custCloseStarValue;
@@ -1301,25 +1303,37 @@ function waiterRenderOrders() {
       wrap.innerHTML = '<div class="empty-state">No active orders right now 🎉</div>';
       return;
     }
-    const statusLabel = { new: 'New', preparing: 'Kitchen Preparing', ready: 'Ready to Serve' };
-    wrap.innerHTML = orders.map(o => `
-      <div class="card">
-        <div class="row">
-          <strong>Table ${o.table.replace(/^T0*/,'')}</strong>
-          <span class="badge ${o.status}">${statusLabel[o.status] || o.status}</span>
-        </div>
-        <p class="small">Order #${o.orderNumber || '—'}</p>
-        ${o.placedBy === 'waiter' ? `<span class="badge available">👤 Waiter order${o.waiterName ? ' — ' + o.waiterName : ''}</span>` : ''}
-        ${o.noKitchen ? '<span class="badge available">No Kitchen — ready-to-serve items</span>' :
-          (o.items.some(i => i.readyToServe) ? '<span class="badge available">Mixed order</span>' : '')}
-        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { forWaiter: true })}</ul>
-        ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
-        ${o.customerMobile ? `<p class="small">📱 ${o.customerMobile}</p>` : ''}
-        <div class="row"><span class="small">₹${o.total}</span>
-          <button style="width:auto" class="danger" onclick="waiterCancelOrder('${o.id}')">Cancel Whole Order</button>
-        </div>
-      </div>`).join('');
+    const columns = [
+      ['new', '🆕 New'],
+      ['preparing', '👨\u200d🍳 Preparing'],
+      ['ready', '✅ Ready to Serve']
+    ];
+    wrap.innerHTML = '<div class="board-columns">' + columns.map(([status, label]) => {
+      const group = orders.filter(o => o.status === status);
+      return `<div class="board-col">
+        <h3>${label} (${group.length})</h3>
+        ${group.length === 0 ? '<p class="small" style="padding:0 6px">Nothing here right now</p>' : group.map(waiterOrderCardHtml).join('')}
+      </div>`;
+    }).join('') + '</div>';
   });
+}
+
+function waiterOrderCardHtml(o) {
+  return `
+    <div class="card">
+      <div class="row">
+        <strong>Table ${o.table.replace(/^T0*/,'')}</strong>
+        <span class="small">#${o.orderNumber || '—'}</span>
+      </div>
+      ${o.placedBy === 'waiter' ? `<span class="badge available">👤 Waiter${o.waiterName ? ' — ' + o.waiterName : ''}</span>` : ''}
+      ${o.noKitchen ? '<span class="badge available">No Kitchen</span>' : (o.items.some(i => i.readyToServe) ? '<span class="badge available">Mixed</span>' : '')}
+      <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { forWaiter: true })}</ul>
+      ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
+      ${o.customerMobile ? `<p class="small">📱 ${o.customerMobile}</p>` : ''}
+      <div class="row"><span class="small">₹${o.total}</span>
+        <button style="width:auto" class="danger" onclick="waiterCancelOrder('${o.id}')">Cancel Whole Order</button>
+      </div>
+    </div>`;
 }
 
 // Serve a single item once the kitchen has it ready (or immediately for ready-to-serve items).
@@ -1732,21 +1746,29 @@ function kitchenListenOrders() {
       board.innerHTML = '<div class="empty-state" style="grid-column:1/-1">All caught up 🎉</div>';
       return;
     }
-    board.innerHTML = orders.map(o => {
-      const ageSeconds = o.createdAt ? (Date.now() / 1000 - o.createdAt.seconds) : 0;
-      const overdue = ageSeconds > overdueMinutes * 60 ? ' overdue' : '';
-      return `
-      <div class="card kcard ${o.status}${overdue}" data-created="${o.createdAt?.seconds || ''}">
-        <h2>Table ${o.table.replace(/^T0*/,'')}</h2>
-        <p class="small">Order #${o.orderNumber || '—'}</p>
-        ${o.placedBy === 'waiter' ? '<span class="badge available">👤 Waiter order</span>' : ''}
-        <span class="badge ${o.status}">${o.status === 'new' ? 'New' : 'Preparing'}</span>
-        <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { onlyKitchen: true, forKitchen: true })}</ul>
-        ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
-        <p class="timer">${kitchenTimeAgo(o.createdAt)}</p>
+    const columns = [['new', '🆕 New'], ['preparing', '👨\u200d🍳 Preparing']];
+    board.innerHTML = columns.map(([status, label]) => {
+      const group = orders.filter(o => o.status === status);
+      return `<div class="board-col" style="min-width:280px">
+        <h3>${label} (${group.length})</h3>
+        ${group.length === 0 ? '<p class="small" style="padding:0 6px">Nothing here right now</p>' : group.map(o => kitchenOrderCardHtml(o, overdueMinutes)).join('')}
       </div>`;
     }).join('');
   });
+}
+function kitchenOrderCardHtml(o, overdueMinutes) {
+  const ageSeconds = o.createdAt ? (Date.now() / 1000 - o.createdAt.seconds) : 0;
+  const overdue = ageSeconds > overdueMinutes * 60 ? ' overdue' : '';
+  return `
+    <div class="card kcard ${o.status}${overdue}" data-created="${o.createdAt?.seconds || ''}">
+      <h2>Table ${o.table.replace(/^T0*/,'')}</h2>
+      <p class="small">Order #${o.orderNumber || '—'}</p>
+      ${o.placedBy === 'waiter' ? '<span class="badge available">👤 Waiter order</span>' : ''}
+      <span class="badge ${o.status}">${o.status === 'new' ? 'New' : 'Preparing'}</span>
+      <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { onlyKitchen: true, forKitchen: true })}</ul>
+      ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
+      <p class="timer">${kitchenTimeAgo(o.createdAt)}</p>
+    </div>`;
 }
 
 function kitchenTimeAgo(ts) {
@@ -2031,23 +2053,40 @@ function adminRenderOrders() {
     const list = document.getElementById('ordersList');
     if (!list) return;
     if (orders.length === 0) { list.innerHTML = '<div class="empty-state">No orders in this filter.</div>'; return; }
-    list.innerHTML = orders.map(o => `
-      <div class="card">
-        <div class="row"><strong>Table ${o.table.replace(/^T0*/,'')}</strong><span class="badge ${o.status}">${o.status}</span></div>
-        <p class="small">Order #${o.orderNumber || '—'}</p>
-        ${o.placedBy === 'waiter' ? `<span class="badge available">👤 Waiter order${o.waiterName ? ' — ' + o.waiterName : ''}</span>` : ''}
-        ${o.noKitchen ? '<span class="badge available">No Kitchen</span>' : ''}
-        <ul style="padding-left:0;list-style:none">${renderItemsList(o, false)}</ul>
-        <div class="row small">
-          <span>₹${o.total}${o.customerMobile ? ' · 📱'+o.customerMobile : ''}</span>
-          <span>${o.acceptedBy ? 'Waiter: '+o.acceptedBy : ''}</span>
-        </div>
-      </div>`).join('');
+    if (adminOrderFilter === 'active') {
+      const columns = [
+        ['new', '🆕 New'], ['preparing', '👨\u200d🍳 Preparing'],
+        ['ready', '✅ Ready'], ['served', '🍽️ Served — awaiting bill']
+      ];
+      list.innerHTML = '<div class="board-columns">' + columns.map(([status, label]) => {
+        const group = orders.filter(o => o.status === status);
+        return `<div class="board-col">
+          <h3>${label} (${group.length})</h3>
+          ${group.length === 0 ? '<p class="small" style="padding:0 6px">Nothing here right now</p>' : group.map(adminOrderCardHtml).join('')}
+        </div>`;
+      }).join('') + '</div>';
+    } else {
+      list.innerHTML = orders.map(adminOrderCardHtml).join('');
+    }
   }, err => {
     if (adminActiveTab !== 'orders') return;
     const list = document.getElementById('ordersList');
     if (list) list.innerHTML = '<div class="empty-state">Could not load orders: ' + err.message + '</div>';
   });
+}
+function adminOrderCardHtml(o) {
+  return `
+    <div class="card">
+      <div class="row"><strong>Table ${o.table.replace(/^T0*/,'')}</strong><span class="badge ${o.status}">${o.status}</span></div>
+      <p class="small">Order #${o.orderNumber || '—'}</p>
+      ${o.placedBy === 'waiter' ? `<span class="badge available">👤 Waiter order${o.waiterName ? ' — ' + o.waiterName : ''}</span>` : ''}
+      ${o.noKitchen ? '<span class="badge available">No Kitchen</span>' : ''}
+      <ul style="padding-left:0;list-style:none">${renderItemsList(o, false)}</ul>
+      <div class="row small">
+        <span>₹${o.total}${o.customerMobile ? ' · 📱'+o.customerMobile : ''}</span>
+        <span>${o.acceptedBy ? 'Waiter: '+o.acceptedBy : ''}</span>
+      </div>
+    </div>`;
 }
 function adminFilterOrders(f) { adminOrderFilter = f; sessionStorage.setItem('adminOrderFilter', f); adminRenderOrders(); }
 
