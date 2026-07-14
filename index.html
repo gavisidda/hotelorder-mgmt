@@ -219,15 +219,27 @@
     <a href="#" data-tab="tables" onclick="waiterSetTab('tables')"><span class="icon">🍽️</span>Tables</a>
     <a href="#" data-tab="calls" onclick="waiterSetTab('calls')"><span class="icon">📣</span>Calls</a>
     <a href="#" data-tab="qr" onclick="waiterSetTab('qr')"><span class="icon">🔲</span>QR</a>
+    <a href="#" data-tab="completed" onclick="waiterSetTab('completed')"><span class="icon">✅</span>Completed</a>
   </div>
 </div>
 
 <div id="view-kitchen" class="view">
   <div class="topbar">
     <h1>🔥 Kitchen Display</h1>
-    <button class="secondary" style="width:auto" onclick="doLogout()">Logout</button>
+    <div style="display:flex;gap:8px">
+      <button class="secondary" style="width:auto" onclick="kitchenShowCompleted()">✅ Completed</button>
+      <button class="secondary" style="width:auto" onclick="doLogout()">Logout</button>
+    </div>
   </div>
   <div class="board" id="kitchenBoard"></div>
+</div>
+
+<div class="sheet" id="kitchenCompletedSheet">
+  <div class="sheet-inner">
+    <h2 style="margin-top:0;color:var(--gold-soft)">Today's Completed Orders</h2>
+    <div id="kitchenCompletedList"></div>
+    <button class="secondary" style="margin-top:8px" onclick="closeSheet('kitchenCompletedSheet')">Close</button>
+  </div>
 </div>
 
 <div class="sheet" id="waiterCartSheet">
@@ -484,13 +496,13 @@ function renderItemsList(order, editable, opts) {
       statusLabel = ' · ✅ served';
     } else if (opts.forKitchen && status === 'new') {
       statusLabel = ' · <span class="small">new</span>';
-      actions += `<button class="mini-x" onclick="kitchenStartPreparingItem('${order.id}',${idx})">Start</button>`;
+      actions += `<button style="width:auto" onclick="kitchenStartPreparingItem('${order.id}',${idx})">Start</button>`;
     } else if (opts.forKitchen && status === 'preparing') {
       statusLabel = ' · <span class="small">preparing</span>';
-      actions += `<button class="mini-x" onclick="kitchenMarkReadyItem('${order.id}',${idx})">Ready</button>`;
+      actions += `<button style="width:auto" onclick="kitchenMarkReadyItem('${order.id}',${idx})">Ready</button>`;
     } else if (opts.forWaiter && status === 'ready') {
       statusLabel = ' · <span class="small">ready to serve</span>';
-      actions += `<button class="mini-x" style="background:var(--gold);color:#1a1408" onclick="waiterServeItem('${order.id}',${idx})">Serve</button>`;
+      actions += `<button style="width:auto;background:var(--green);color:#fff" onclick="waiterServeItem('${order.id}',${idx})">Serve</button>`;
     } else if (opts.forWaiter && status === 'new') {
       statusLabel = ' · <span class="small">waiting for kitchen</span>';
     } else if (opts.forWaiter && status === 'preparing') {
@@ -499,9 +511,9 @@ function renderItemsList(order, editable, opts) {
       statusLabel = ' · <span class="small">' + status + '</span>';
     }
     if (editable) {
-      actions += `<button class="danger mini-x" onclick="cancelOrderItem('${order.id}',${idx})">✕</button>`;
+      actions += `<button style="width:auto" class="danger" onclick="cancelOrderItem('${order.id}',${idx})">Cancel</button>`;
     }
-    return `<li><span>${i.qty} × ${i.name}${tag}${statusLabel}</span><span style="display:flex;gap:4px">${actions}</span></li>`;
+    return `<li><span>${i.qty} × ${i.name}${tag}${statusLabel}</span><span style="display:flex;gap:6px;flex-wrap:wrap">${actions}</span></li>`;
   }).join('');
 }
 
@@ -1326,6 +1338,7 @@ function waiterRender() {
   else if (waiterActiveTab === 'tables') waiterRenderTables();
   else if (waiterActiveTab === 'calls') waiterRenderCalls();
   else if (waiterActiveTab === 'qr') waiterRenderQR();
+  else if (waiterActiveTab === 'completed') waiterRenderCompleted();
 }
 
 function waiterRenderOrders() {
@@ -1360,9 +1373,7 @@ function waiterOrderCardHtml(o) {
       <ul class="item-line-list" style="padding-left:0;list-style:none">${renderItemsList(o, true, { forWaiter: true })}</ul>
       ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
       ${o.customerMobile ? `<p class="small">📱 ${o.customerMobile}</p>` : ''}
-      <div class="row"><span class="small">₹${o.total}</span>
-        <button style="width:auto" class="danger" onclick="waiterCancelOrder('${o.id}')">Cancel Whole Order</button>
-      </div>
+      <div class="row"><span class="small">₹${o.total}</span></div>
     </div>`;
 }
 
@@ -1399,8 +1410,8 @@ function waiterMarkAllReadyServed(orderId) {
   }).catch(err => toast('Could not load that order: ' + err.message));
 }
 
-function waiterCancelOrder(id) {
-  if (!confirm('Cancel this entire order? Individual items can be cancelled instead using the ✕ next to each item.')) return;
+function adminCancelOrder(id) {
+  if (!confirm('Cancel this entire order? Individual items can be cancelled instead using the Cancel button next to each item.')) return;
   db.collection('orders').doc(id).update({ status: 'cancelled', cancelledAt: firebase.firestore.FieldValue.serverTimestamp() })
     .then(() => logActivity('cancel_order', id))
     .catch(err => toast('Could not cancel that order: ' + err.message));
@@ -1744,6 +1755,34 @@ function waiterPrintQR(tableId) {
   setTimeout(() => win.print(), 400);
 }
 
+// Read-only view of today's finished orders (served or already billed), so waiters can look
+// back at what went out earlier in the shift without needing admin access.
+function waiterRenderCompleted() {
+  const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+  const wrap = document.getElementById('waiterContent');
+  wrap.innerHTML = '<div class="spinner"></div>';
+  db.collection('orders').where('createdAt', '>=', startOfDay).get().then(snap => {
+    if (waiterActiveTab !== 'completed') return;
+    let orders = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => ['served', 'billed'].includes(o.status));
+    orders = orders.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    if (orders.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No completed orders yet today.</div>';
+      return;
+    }
+    wrap.innerHTML = orders.map(o => `
+      <div class="card">
+        <div class="row"><strong>Table ${o.table.replace(/^T0*/,'')}</strong><span class="badge ${o.status}">${o.status}</span></div>
+        <p class="small">Order #${o.orderNumber || '—'}</p>
+        ${o.placedBy === 'waiter' ? `<span class="badge available">👤 Waiter${o.waiterName ? ' — ' + o.waiterName : ''}</span>` : ''}
+        <ul class="item-line-list" style="padding-left:0;list-style:none">${renderItemsList(o, false)}</ul>
+        <div class="row small"><span>₹${o.total}</span></div>
+      </div>`).join('');
+  }).catch(err => {
+    if (waiterActiveTab !== 'completed') return;
+    wrap.innerHTML = '<div class="empty-state">Could not load completed orders: ' + err.message + '</div>';
+  });
+}
+
 // ============================================================
 // KITCHEN VIEW
 // ============================================================
@@ -1751,6 +1790,31 @@ function kitchenInit() {
   loadMgmtSettings();
   kitchenListenOrders();
   setInterval(kitchenRefreshTimers, 30000);
+}
+
+// Read-only view of today's finished orders (served or already billed), so kitchen staff can
+// glance back at what's gone out earlier in the shift without needing admin access.
+function kitchenShowCompleted() {
+  const list = document.getElementById('kitchenCompletedList');
+  list.innerHTML = '<div class="spinner"></div>';
+  document.getElementById('kitchenCompletedSheet').style.display = 'block';
+  const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+  db.collection('orders').where('createdAt', '>=', startOfDay).get().then(snap => {
+    let orders = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => ['served', 'billed'].includes(o.status));
+    orders = orders.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    if (orders.length === 0) {
+      list.innerHTML = '<div class="empty-state">No completed orders yet today.</div>';
+      return;
+    }
+    list.innerHTML = orders.map(o => `
+      <div class="card">
+        <div class="row"><strong>Table ${o.table.replace(/^T0*/,'')}</strong><span class="badge ${o.status}">${o.status}</span></div>
+        <p class="small">Order #${o.orderNumber || '—'}</p>
+        <ul class="item-line-list" style="padding-left:0;list-style:none">${renderItemsList(o, false)}</ul>
+      </div>`).join('');
+  }).catch(err => {
+    list.innerHTML = '<div class="empty-state">Could not load completed orders: ' + err.message + '</div>';
+  });
 }
 
 let kitchenFirstSnapshotDone = false;
@@ -2096,6 +2160,7 @@ function adminRenderOrders() {
   });
 }
 function adminOrderCardHtml(o) {
+  const canCancel = !['billed', 'cancelled'].includes(o.status);
   return `
     <div class="card">
       <div class="row"><strong>Table ${o.table.replace(/^T0*/,'')}</strong><span class="badge ${o.status}">${o.status}</span></div>
@@ -2107,6 +2172,7 @@ function adminOrderCardHtml(o) {
         <span>₹${o.total}${o.customerMobile ? ' · 📱'+o.customerMobile : ''}</span>
         <span>${o.acceptedBy ? 'Waiter: '+o.acceptedBy : ''}</span>
       </div>
+      ${canCancel ? `<button style="width:auto;margin-top:8px" class="danger" onclick="adminCancelOrder('${o.id}')">Cancel Whole Order</button>` : ''}
     </div>`;
 }
 function adminFilterOrders(f) { adminOrderFilter = f; sessionStorage.setItem('adminOrderFilter', f); adminRenderOrders(); }
