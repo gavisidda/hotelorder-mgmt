@@ -72,6 +72,9 @@
   .star { opacity: 0.3; }
   .star.filled { opacity: 1; }
   .mini-x { width: auto !important; padding: 2px 8px !important; font-size: 11px !important; }
+  .item-line-list li { border-bottom: 1px solid var(--border); padding: 7px 0; }
+  .item-line-list li:last-child { border-bottom: none; }
+  .item-line-list.kcard li, .kcard .item-line-list li { border-bottom-color: rgba(255,255,255,0.12); }
   .cancelled-item { text-decoration: line-through; color: var(--text-dim); }
   #receiptItems .row { padding: 4px 0; }
   @media print {
@@ -601,26 +604,58 @@ function waiterListenCalls() {
 
 let readyBeepInterval = null;
 let activeReadyOrders = [];
+let acknowledgedReadyOrderIds = new Set();
+
+function renderReadyRows() {
+  const rows = document.getElementById('readyRows');
+  if (!rows) return;
+  rows.innerHTML = activeReadyOrders.map(o => {
+    const acked = acknowledgedReadyOrderIds.has(o.id);
+    return `
+      <div class="call-row">
+        <span>🍽️ Table ${o.table.replace(/^T0*/,'')} is ready to serve${acked ? ' <span class="small">(acknowledged)</span>' : ''}</span>
+        <span style="display:flex;gap:6px">
+          ${acked ? '' : `<button class="secondary" onclick="waiterAcknowledgeReady('${o.id}')">Acknowledge</button>`}
+          <button onclick="waiterMarkAllReadyServed('${o.id}')">Mark Served</button>
+        </span>
+      </div>`;
+  }).join('');
+}
+function updateReadyBeepState() {
+  const anyUnacknowledged = activeReadyOrders.some(o => !acknowledgedReadyOrderIds.has(o.id));
+  if (anyUnacknowledged) {
+    if (!readyBeepInterval) {
+      playBeep();
+      readyBeepInterval = setInterval(playBeep, 4000);
+    }
+  } else if (readyBeepInterval) {
+    clearInterval(readyBeepInterval);
+    readyBeepInterval = null;
+  }
+}
+// Acknowledging silences the repeating beep for that order without marking it served —
+// useful when a waiter has seen the alert and will collect it shortly, but isn't ready to
+// tap "served" yet. The beep keeps going for anything still unacknowledged.
+function waiterAcknowledgeReady(orderId) {
+  acknowledgedReadyOrderIds.add(orderId);
+  renderReadyRows();
+  updateReadyBeepState();
+}
+
 function waiterListenReady() {
   db.collection('orders').where('status', '==', 'ready').onSnapshot(snap => {
     activeReadyOrders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const stillReadyIds = new Set(activeReadyOrders.map(o => o.id));
+    acknowledgedReadyOrderIds.forEach(id => { if (!stillReadyIds.has(id)) acknowledgedReadyOrderIds.delete(id); });
     const banner = document.getElementById('readyBanner');
-    const rows = document.getElementById('readyRows');
     if (activeReadyOrders.length === 0) {
       banner.style.display = 'none';
       if (readyBeepInterval) { clearInterval(readyBeepInterval); readyBeepInterval = null; }
       return;
     }
     banner.style.display = 'flex';
-    rows.innerHTML = activeReadyOrders.map(o => `
-      <div class="call-row">
-        <span>🍽️ Table ${o.table.replace(/^T0*/,'')} is ready to serve</span>
-        <button onclick="waiterMarkAllReadyServed('${o.id}')">Mark Served</button>
-      </div>`).join('');
-    if (!readyBeepInterval) {
-      playBeep();
-      readyBeepInterval = setInterval(playBeep, 4000);
-    }
+    renderReadyRows();
+    updateReadyBeepState();
   });
 }
 
@@ -1297,37 +1332,32 @@ function waiterRenderOrders() {
   db.collection('orders').where('status', 'in', ['new', 'preparing', 'ready']).onSnapshot(snap => {
     if (waiterActiveTab !== 'orders') return;
     let orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    orders = orders.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+    const statusRank = { new: 0, preparing: 1, ready: 2 };
+    orders = orders.sort((a, b) => {
+      const r = (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9);
+      return r !== 0 ? r : (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0);
+    });
     const wrap = document.getElementById('waiterContent');
     if (orders.length === 0) {
       wrap.innerHTML = '<div class="empty-state">No active orders right now 🎉</div>';
       return;
     }
-    const columns = [
-      ['new', '🆕 New'],
-      ['preparing', '👨\u200d🍳 Preparing'],
-      ['ready', '✅ Ready to Serve']
-    ];
-    wrap.innerHTML = '<div class="board-columns">' + columns.map(([status, label]) => {
-      const group = orders.filter(o => o.status === status);
-      return `<div class="board-col">
-        <h3>${label} (${group.length})</h3>
-        ${group.length === 0 ? '<p class="small" style="padding:0 6px">Nothing here right now</p>' : group.map(waiterOrderCardHtml).join('')}
-      </div>`;
-    }).join('') + '</div>';
+    wrap.innerHTML = orders.map(waiterOrderCardHtml).join('');
   });
 }
 
 function waiterOrderCardHtml(o) {
+  const statusLabel = { new: 'New', preparing: 'Preparing', ready: 'Ready to Serve' };
   return `
     <div class="card">
       <div class="row">
         <strong>Table ${o.table.replace(/^T0*/,'')}</strong>
-        <span class="small">#${o.orderNumber || '—'}</span>
+        <span class="badge ${o.status}">${statusLabel[o.status] || o.status}</span>
       </div>
+      <p class="small">Order #${o.orderNumber || '—'}</p>
       ${o.placedBy === 'waiter' ? `<span class="badge available">👤 Waiter${o.waiterName ? ' — ' + o.waiterName : ''}</span>` : ''}
       ${o.noKitchen ? '<span class="badge available">No Kitchen</span>' : (o.items.some(i => i.readyToServe) ? '<span class="badge available">Mixed</span>' : '')}
-      <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { forWaiter: true })}</ul>
+      <ul class="item-line-list" style="padding-left:0;list-style:none">${renderItemsList(o, true, { forWaiter: true })}</ul>
       ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
       ${o.customerMobile ? `<p class="small">📱 ${o.customerMobile}</p>` : ''}
       <div class="row"><span class="small">₹${o.total}</span>
@@ -1738,22 +1768,19 @@ function kitchenListenOrders() {
     kitchenFirstSnapshotDone = true;
 
     const overdueMinutes = mgmtSettings.estimatedPrepMinutes || 15;
+    const statusRank = { new: 0, preparing: 1 };
     const orders = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .filter(o => !o.noKitchen)
-      .sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+      .sort((a, b) => {
+        const r = (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9);
+        return r !== 0 ? r : (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0);
+      });
     const board = document.getElementById('kitchenBoard');
     if (orders.length === 0) {
       board.innerHTML = '<div class="empty-state" style="grid-column:1/-1">All caught up 🎉</div>';
       return;
     }
-    const columns = [['new', '🆕 New'], ['preparing', '👨\u200d🍳 Preparing']];
-    board.innerHTML = columns.map(([status, label]) => {
-      const group = orders.filter(o => o.status === status);
-      return `<div class="board-col" style="min-width:280px">
-        <h3>${label} (${group.length})</h3>
-        ${group.length === 0 ? '<p class="small" style="padding:0 6px">Nothing here right now</p>' : group.map(o => kitchenOrderCardHtml(o, overdueMinutes)).join('')}
-      </div>`;
-    }).join('');
+    board.innerHTML = orders.map(o => kitchenOrderCardHtml(o, overdueMinutes)).join('');
   });
 }
 function kitchenOrderCardHtml(o, overdueMinutes) {
@@ -1765,7 +1792,7 @@ function kitchenOrderCardHtml(o, overdueMinutes) {
       <p class="small">Order #${o.orderNumber || '—'}</p>
       ${o.placedBy === 'waiter' ? '<span class="badge available">👤 Waiter order</span>' : ''}
       <span class="badge ${o.status}">${o.status === 'new' ? 'New' : 'Preparing'}</span>
-      <ul style="padding-left:0;list-style:none">${renderItemsList(o, true, { onlyKitchen: true, forKitchen: true })}</ul>
+      <ul class="item-line-list" style="padding-left:0;list-style:none">${renderItemsList(o, true, { onlyKitchen: true, forKitchen: true })}</ul>
       ${o.notes ? `<p class="small">📝 ${o.notes}</p>` : ''}
       <p class="timer">${kitchenTimeAgo(o.createdAt)}</p>
     </div>`;
@@ -2045,29 +2072,23 @@ function adminRenderOrders() {
         `<button class="${adminOrderFilter===f?'active':''}" onclick="adminFilterOrders('${f}')">${f.charAt(0).toUpperCase()+f.slice(1)}</button>`).join('')}
     </div>
     <div id="ordersList"><div class="spinner"></div></div>`;
+  const statusRank = { new: 0, preparing: 1, ready: 2, served: 3 };
   query.orderBy('createdAt','desc').limit(100).onSnapshot(snap => {
     if (adminActiveTab !== 'orders') return;
     let orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (adminOrderFilter === 'active') orders = orders.filter(o => ['new','preparing','ready','served'].includes(o.status));
-    else if (adminOrderFilter !== 'all') orders = orders.filter(o => o.status === adminOrderFilter);
+    if (adminOrderFilter === 'active') {
+      orders = orders.filter(o => ['new','preparing','ready','served'].includes(o.status))
+        .sort((a, b) => {
+          const r = (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9);
+          return r !== 0 ? r : (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0);
+        });
+    } else if (adminOrderFilter !== 'all') {
+      orders = orders.filter(o => o.status === adminOrderFilter);
+    }
     const list = document.getElementById('ordersList');
     if (!list) return;
     if (orders.length === 0) { list.innerHTML = '<div class="empty-state">No orders in this filter.</div>'; return; }
-    if (adminOrderFilter === 'active') {
-      const columns = [
-        ['new', '🆕 New'], ['preparing', '👨\u200d🍳 Preparing'],
-        ['ready', '✅ Ready'], ['served', '🍽️ Served — awaiting bill']
-      ];
-      list.innerHTML = '<div class="board-columns">' + columns.map(([status, label]) => {
-        const group = orders.filter(o => o.status === status);
-        return `<div class="board-col">
-          <h3>${label} (${group.length})</h3>
-          ${group.length === 0 ? '<p class="small" style="padding:0 6px">Nothing here right now</p>' : group.map(adminOrderCardHtml).join('')}
-        </div>`;
-      }).join('') + '</div>';
-    } else {
-      list.innerHTML = orders.map(adminOrderCardHtml).join('');
-    }
+    list.innerHTML = orders.map(adminOrderCardHtml).join('');
   }, err => {
     if (adminActiveTab !== 'orders') return;
     const list = document.getElementById('ordersList');
@@ -2081,7 +2102,7 @@ function adminOrderCardHtml(o) {
       <p class="small">Order #${o.orderNumber || '—'}</p>
       ${o.placedBy === 'waiter' ? `<span class="badge available">👤 Waiter order${o.waiterName ? ' — ' + o.waiterName : ''}</span>` : ''}
       ${o.noKitchen ? '<span class="badge available">No Kitchen</span>' : ''}
-      <ul style="padding-left:0;list-style:none">${renderItemsList(o, false)}</ul>
+      <ul class="item-line-list" style="padding-left:0;list-style:none">${renderItemsList(o, false)}</ul>
       <div class="row small">
         <span>₹${o.total}${o.customerMobile ? ' · 📱'+o.customerMobile : ''}</span>
         <span>${o.acceptedBy ? 'Waiter: '+o.acceptedBy : ''}</span>
