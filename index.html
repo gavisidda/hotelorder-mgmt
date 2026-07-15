@@ -41,7 +41,7 @@
   .kcard.overdue { border-top-color: var(--red); animation: overduePulse 1.6s infinite; }
   @keyframes overduePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.75; } }
   .kcard h2 { margin: 0 0 8px; font-size: 22px; }
-  .kcard li { font-size: 16px; margin-bottom: 4px; display:flex; justify-content:space-between; align-items:center; gap:6px; }
+  .kcard li { margin-bottom: 4px; }
   .timer { font-size: 12px; color: var(--text-dim); }
   .pay-option { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
   .pay-option button { background: var(--bg-card); border: 1px solid var(--border); color: var(--text); }
@@ -72,9 +72,14 @@
   .star { opacity: 0.3; }
   .star.filled { opacity: 1; }
   .mini-x { width: auto !important; padding: 2px 8px !important; font-size: 11px !important; }
-  .item-line-list li { border-bottom: 1px solid var(--border); padding: 7px 0; }
+  .item-line-list li { border-bottom: 1px solid var(--border); padding: 8px 0; }
   .item-line-list li:last-child { border-bottom: none; }
   .item-line-list.kcard li, .kcard .item-line-list li { border-bottom-color: rgba(255,255,255,0.12); }
+  .item-line-main { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .item-text { font-size: 16px; line-height: 1.35; }
+  .item-price { font-size: 15px; color: var(--gold-soft); white-space: nowrap; flex-shrink: 0; }
+  .item-line-actions { margin-top: 7px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .item-btn { width: auto !important; padding: 6px 14px !important; font-size: 12px !important; font-weight: 600 !important; }
   .cancelled-item { text-decoration: line-through; color: var(--text-dim); }
   #receiptItems .row { padding: 4px 0; }
   @media print {
@@ -496,13 +501,13 @@ function renderItemsList(order, editable, opts) {
       statusLabel = ' · ✅ served';
     } else if (opts.forKitchen && status === 'new') {
       statusLabel = ' · <span class="small">new</span>';
-      actions += `<button style="width:auto" onclick="kitchenStartPreparingItem('${order.id}',${idx})">Start</button>`;
+      actions += `<button class="item-btn" onclick="kitchenStartPreparingItem('${order.id}',${idx})">Start</button>`;
     } else if (opts.forKitchen && status === 'preparing') {
       statusLabel = ' · <span class="small">preparing</span>';
-      actions += `<button style="width:auto" onclick="kitchenMarkReadyItem('${order.id}',${idx})">Ready</button>`;
+      actions += `<button class="item-btn" onclick="kitchenMarkReadyItem('${order.id}',${idx})">Ready</button>`;
     } else if (opts.forWaiter && status === 'ready') {
       statusLabel = ' · <span class="small">ready to serve</span>';
-      actions += `<button style="width:auto;background:var(--green);color:#fff" onclick="waiterServeItem('${order.id}',${idx})">Serve</button>`;
+      actions += `<button class="item-btn" style="background:var(--green);color:#fff" onclick="waiterServeItem('${order.id}',${idx})">Serve</button>`;
     } else if (opts.forWaiter && status === 'new') {
       statusLabel = ' · <span class="small">waiting for kitchen</span>';
     } else if (opts.forWaiter && status === 'preparing') {
@@ -511,9 +516,16 @@ function renderItemsList(order, editable, opts) {
       statusLabel = ' · <span class="small">' + status + '</span>';
     }
     if (editable) {
-      actions += `<button style="width:auto" class="danger" onclick="cancelOrderItem('${order.id}',${idx})">Cancel</button>`;
+      actions += `<button class="item-btn danger" onclick="cancelOrderItem('${order.id}',${idx})">Cancel</button>`;
     }
-    return `<li><span>${i.qty} × ${i.name}${tag}${statusLabel}</span><span style="display:flex;gap:6px;flex-wrap:wrap">${actions}</span></li>`;
+    const priceHtml = (!opts.forKitchen && !opts.forWaiter) ? `<span class="item-price">₹${i.price * i.qty}</span>` : '';
+    return `<li>
+      <div class="item-line-main">
+        <span class="item-text">${i.qty} × ${i.name}${tag}${statusLabel}</span>
+        ${priceHtml}
+      </div>
+      ${actions ? `<div class="item-line-actions">${actions}</div>` : ''}
+    </li>`;
   }).join('');
 }
 
@@ -1195,7 +1207,7 @@ function custShowOrderHistory() {
         const showEta = !o.noKitchen && ['new', 'preparing'].includes(o.status);
         return `<div class="card">
           <p class="small">Order #${o.orderNumber || '—'}${o.placedBy === 'waiter' ? ' · 👤 Placed by waiter' + (o.waiterName ? ' (' + o.waiterName + ')' : '') : ''}</p>
-          <ul style="padding-left:0;list-style:none">${renderItemsList({ id: d.id, items: o.items }, false)}</ul>
+          <ul class="item-line-list" style="padding-left:0;list-style:none">${renderItemsList({ id: d.id, items: o.items }, false)}</ul>
           <div class="row"><span class="small">₹${o.total}</span><span class="badge ${o.status}">${o.status}</span></div>
           ${showEta ? `<p class="small">⏱ Estimated ready in ~${custEstimatedPrepMinutes} mins</p>` : ''}
           ${canRate ? `<div id="rate-${d.id}">
