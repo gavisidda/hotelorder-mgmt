@@ -2202,29 +2202,28 @@ function adminRenderMenuAdmin() {
       if (adminActiveTab !== 'menu') return;
       const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       const wrap = document.getElementById('adminContent');
-      wrap.innerHTML = `
+      const csvCard = `
         <div class="card">
           <p class="small">Import menu items from a CSV file — matches existing items by name to update them, everything else is added new.</p>
           <input type="file" id="csvFileInput" accept=".csv" onchange="adminImportCSV(event)">
           <button class="secondary" onclick="adminDownloadCSVTemplate()">⬇️ Download CSV Template</button>
           <button class="secondary" style="margin-top:8px" onclick="adminExportMenuCSV()">⬇️ Export Current Menu to CSV</button>
-        </div>
+        </div>`;
+      wrap.innerHTML = `
         <button class="secondary" style="margin-bottom:12px" onclick="adminOpenCatSheet()">+ Manage Categories (${adminCategoriesCache.length})</button>
-      ` + (items.length === 0 ? '<div class="empty-state">No menu items yet. Tap + to add one, or import a CSV above.</div>' :
+      ` + (items.length === 0 ? '<div class="empty-state">No menu items yet. Tap + to add one, or import a CSV below.</div>' :
         items.map(i => {
           const cat = adminCategoriesCache.find(c => c.id === i.category);
-          return `<div class="card row">
-            <div>
-              <strong>${i.name}</strong> <span class="small">₹${i.price}</span>
-              <p class="small">${cat ? cat.name : 'Uncategorized'} ${i.available ? '' : '· Hidden'} ${i.readyToServe ? '· Ready-to-serve' : ''} ${i.scheduleStart ? '· '+i.scheduleStart+'–'+i.scheduleEnd : ''} ${i.trackStock ? '· Stock: ' + (i.stockQty || 0) + (((i.stockQty||0) <= (i.lowStockThreshold||5)) ? ' ⚠️ Low' : '') : ''}</p>
-            </div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap">
+          return `<div class="card">
+            <strong>${i.name}</strong> <span class="small">₹${i.price}</span>
+            <p class="small">${cat ? cat.name : 'Uncategorized'} ${i.available ? '' : '· Hidden'} ${i.readyToServe ? '· Ready-to-serve' : ''} ${i.scheduleStart ? '· '+i.scheduleStart+'–'+i.scheduleEnd : ''} ${i.trackStock ? '· Stock: ' + (i.stockQty || 0) + (((i.stockQty||0) <= (i.lowStockThreshold||5)) ? ' ⚠️ Low' : '') : ''}</p>
+            <div class="item-line-actions">
               <button style="width:auto" class="secondary" onclick="adminToggleMenuAvailability('${i.id}', ${!i.available})">${i.available ? 'Hide' : 'Show'}</button>
               <button style="width:auto" class="secondary" onclick='adminEditMenuItem(${JSON.stringify(i).replace(/'/g, "&apos;")})'>Edit</button>
-              <button style="width:auto" class="danger" onclick="adminDeleteMenuItem('${i.id}')">🗑</button>
+              <button style="width:auto" class="danger" onclick="adminDeleteMenuItem('${i.id}')">Delete</button>
             </div>
           </div>`;
-        }).join(''));
+        }).join('')) + csvCard;
     });
   });
 }
@@ -2508,11 +2507,11 @@ function adminRenderStaff() {
               <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
             </select>
           </div>
-          <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">
+          <div class="item-line-actions" style="margin-top:10px">
             <button style="width:auto" onclick="adminApproveUser('${u.id}')">Save Role &amp; Approve</button>
             <button style="width:auto" class="secondary" onclick="adminToggleUser('${u.id}', ${!u.active})">${u.active ? 'Disable' : 'Enable'}</button>
             <button style="width:auto" class="secondary" onclick="adminResetPin('${u.id}')">Reset PIN</button>
-            <button style="width:auto" class="danger" onclick="adminDeleteUser('${u.id}')">🗑</button>
+            <button style="width:auto" class="danger" onclick="adminDeleteUser('${u.id}')">Delete</button>
           </div>
         </div>`;
       }).join('');
