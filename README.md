@@ -484,7 +484,128 @@ directly from Firestore, so:
 This is a more solid foundation than the old per-device tracking, and fixes the root cause rather
 than special-casing waiter orders on top of it.
 
-## Customer dashboard + column boards for tracking orders (latest update)
+## PWA install for staff, branded "Hotel" (latest update)
+
+The app can now be installed as a home-screen app — by staff **and** customers, on Android,
+iOS, and desktop Chrome — showing up as **"Hotel"** with a custom hotel-bed icon.
+
+### What was actually broken before this
+Two real gaps, not just missing polish:
+- `manifest.json` already referenced icon files (`assets/icon-192.png`, `assets/icon-512.png`),
+  but those files never existed — the `assets/` folder was empty. Install would have shown a
+  blank/broken icon, or some browsers may have refused the install prompt entirely.
+- The service worker (needed for a page to be "installable" at all) was only ever registered
+  inside the **customer** ordering flow — staff dashboards never registered it, so **staff could
+  never install the app**, regardless of the icon issue.
+
+### What's fixed now
+- Real icon files generated and added: `assets/icon-192.png`, `assets/icon-512.png`,
+  `assets/icon-maskable-512.png` (safe-zone padded for Android's adaptive-icon masking),
+  `assets/apple-touch-icon.png` (iOS home screen), and `assets/favicon-32.png` (browser tab).
+  All a simple gold hotel-bed mark on the app's dark navy, matching the existing theme —
+  a real 🏨 emoji glyph doesn't render reliably as a standalone image file across platforms, so
+  this is a clean vector equivalent instead.
+- `manifest.json` renamed to **"Hotel"** (both `name` and `short_name`, so it's short enough to
+  fit under the icon on a home screen), includes the maskable icon, and sets portrait orientation.
+- Service worker registration **moved to run on every page load**, regardless of role — so
+  waiter, kitchen, admin, and cashier can all install it now, not just customers.
+- Added `apple-touch-icon` and `apple-mobile-web-app-*` meta tags, since iOS Safari doesn't fully
+  support the web manifest for "Add to Home Screen" and needs these explicitly.
+- Bumped the service worker's cache version so anyone who already had the app installed picks up
+  these fixes automatically next time they open it.
+
+### How staff install it
+Open the site in Chrome (Android) or Safari (iOS) → browser menu → **"Add to Home Screen"** /
+**"Install App"**. It'll appear as "Hotel" with the bed icon, launching full-screen without browser
+chrome, same as any native app icon.
+
+## Menu tab and Staff card layout fixes (latest update)
+
+### Menu tab reordered
+"Download CSV Template" and "Export Current Menu to CSV" now sit at the **end** of the Menu tab,
+after the full list of menu items, instead of at the top above them.
+
+### Fixed: Hide/Edit/Delete and staff action buttons stacking vertically
+Both the menu item card (Hide/Edit/Delete) and the staff card (Save Role & Approve/Disable/Reset
+PIN/Delete) were using the same `.row` layout style meant for a simple two-item line (label on the
+left, value on the right). With three or four buttons squeezed into that same layout, they ended
+up wrapping onto their own separate lines instead of sitting in one neat row — the same underlying
+issue as the kitchen button crowding from the last update. Both now use the same horizontal
+button-row treatment as everything else (order items, item actions) — Hide/Edit/Delete sit in one
+row below each menu item, and Save Role & Approve/Disable/Reset PIN/Delete sit in one row below
+each staff member's details.
+
+## Item list layout fixes (latest update)
+
+Three related corrections to how items display within an order card:
+
+### Customer's "My Orders" now has line separators and prices
+Previously the line-separator styling was applied to waiter/kitchen/admin item lists but was
+missed on the customer's own "My Orders" view. Fixed — the same thin divider between items now
+shows there too. Also added the **line price on the right side of each item** (qty × item price)
+in both the customer's My Orders and Admin's Orders tab — everything else about those lists is
+unchanged, just the line and the price.
+
+### Fixed: Kitchen's Start/Cancel buttons were crowding together
+The kitchen board gives each item **two** possible buttons (Start/Ready *and* Cancel, since
+kitchen can cancel an unavailable item), and the old layout tried to fit both into a single row
+squeezed against the item text — which is what was causing the cramped "top and down" look.
+Action buttons for every item (kitchen, waiter, anywhere they appear) now sit on their **own row
+directly below the item's name**, consistently, so they never fight for space with the text or
+with each other.
+
+### Buttons resized to match the item text better
+Per-item action buttons (Cancel, Serve, Start, Ready) were visually louder than the item text next
+to them, due to the default button's bold weight and generous padding. They're now noticeably more
+compact (smaller padding and font size), while the item text itself got a touch larger — aiming
+for the two to read at a similar visual weight instead of the button dominating the line. Worth a
+look once deployed — happy to nudge the sizes further either direction if it's not quite right.
+
+## Button cleanup + today's completed orders for waiter/kitchen (latest update)
+
+### Cancel Whole Order moved to Admin/Cashier only
+Waiters can still cancel **individual items** (with a reason), but cancelling an **entire order**
+is now Admin/Cashier-only — removed from the waiter's order cards, added to the admin Orders tab
+(shown on any order that isn't already billed or cancelled).
+
+### Consistent button styling
+- The per-item **Cancel** button now says "Cancel" (not "✕") and matches the same red, full-label
+  style as "Cancel Whole Order," instead of a tiny compact button.
+- The per-item **Serve** button is now **green**, sized and styled the same way — easier to spot
+  at a glance among the other item actions.
+- Kitchen's per-item Start/Ready buttons got the same sizing treatment for visual consistency.
+
+### Waiter and Kitchen can now see today's completed orders
+- **Waiter**: new "✅ Completed" tab in the bottom nav — lists every order served or billed today,
+  read-only, most recent first.
+- **Kitchen**: new "✅ Completed" button in the top bar opens the same list in an overlay, so
+  kitchen staff can check back on earlier orders without leaving the live board running
+  underneath.
+
+Neither of these expose any new actions — they're purely for looking back at what's already gone
+out during the shift.
+
+## Follow-up: single card per order, not horizontal columns (latest update)
+
+Feedback on the previous update: the swipeable horizontal columns weren't a good fit in practice.
+Reverted to **one card per order**, same as before columns were introduced — status just updates
+in place on that card (the badge changes color/text as it moves from New → Preparing → Ready →
+Served) instead of the card jumping between columns. Applies consistently across the Waiter Orders
+tab, Kitchen Display, and Admin's Orders tab. Orders are sorted so the most urgent (New, then
+Preparing, then Ready) naturally float to the top, without needing separate columns to see that
+at a glance.
+
+Two smaller improvements alongside this:
+- **Items within a card now have a clear line between each one** (a thin divider), so a multi-item
+  order is easier to scan than items just stacked with no separation.
+- **The "ready to serve" alert can now be acknowledged without marking it served.** Previously the
+  only way to stop the repeating beep was to serve the item. Now there's an **Acknowledge** button
+  — tap it to silence the beep for that specific alert (marked "(acknowledged)" in the banner)
+  while still leaving it visible as a reminder to actually go serve it. The beep keeps going for
+  anything still unacknowledged, and "Mark Served" is still right there whenever it's actually
+  delivered.
+
+## Customer dashboard + column boards for tracking orders
 
 ### Customer dashboard restructure
 - The top bar (restaurant name + table number) was already sticky/fixed while scrolling the menu

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'restaurant-order-v1';
+const CACHE_NAME = 'restaurant-order-v2';
 const CORE_ASSETS = ['index.html', 'styles.css', 'firebase-config.js', 'manifest.json'];
 
 self.addEventListener('install', e => {
